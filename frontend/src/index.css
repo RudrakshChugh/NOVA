@@ -1,0 +1,19 @@
+:root { font-family: system-ui, sans-serif; color: #1a1a1a; background: #f6f6f4; }
+body { margin: 0; }
+header { display: flex; gap: 16px; align-items: center; padding: 10px 20px; background: #fff; border-bottom: 1px solid #ddd; }
+header nav button { margin-right: 6px; }
+main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+h2 { margin-top: 0; }
+table { border-collapse: collapse; width: 100%; background: #fff; }
+th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; font-size: 14px; }
+input, select, textarea { font: inherit; padding: 4px 6px; }
+textarea { width: 100%; box-sizing: border-box; }
+button { font: inherit; padding: 5px 10px; cursor: pointer; }
+.card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 14px; margin-bottom: 14px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-right: 6px; }
+.ok { background: #d9f2df; color: #14532d; }
+.bad { background: #fde2e2; color: #7f1d1d; }
+.muted { color: #666; font-size: 13px; }
+.error { color: #b00020; }
+.cite { background: #f3f4f6; border-left: 3px solid #999; padding: 6px 10px; margin: 6px 0; font-size: 13px; }
+pre { white-space: pre-wrap; font-size: 12px; background: #f3f4f6; padding: 8px; }

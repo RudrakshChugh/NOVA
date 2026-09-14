@@ -1,0 +1,156 @@
+"""Day 5 end-to-end journey (plan §10): upload -> blueprint -> generate -> review -> publish.
+
+Runs against a real Postgres database (aqp_test) so ingestion, pgvector retrieval and every
+table write are exercised. The LLM adapter is stubbed so the test is deterministic and does
+not need an API key; live generation is verified manually against the hosted backend.
+"""
+
+import os
+
+import pymupdf
+import pytest
+
+os.environ["DATABASE_URL"] = "postgresql+psycopg://postgres:postgres@localhost:5432/aqp_test"
+
+import psycopg  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.db import Base, engine  # noqa: E402
+from app.llm.base import GenerationResult  # noqa: E402
+from app.main import app  # noqa: E402
+from app.services import orchestrator  # noqa: E402
+
+PASSAGE = (
+    "Congestion control in TCP limits the sending rate when the network is overloaded. "
+    "TCP uses a congestion window that grows additively and shrinks multiplicatively. "
+    "Slow start doubles the window every round trip until a threshold is reached. "
+    "When a packet loss is detected the window is halved. "
+    "Fast retransmit resends a segment after three duplicate acknowledgements. "
+    "Flow control, by contrast, protects the receiver rather than the network. "
+    "The receiver advertises a window that bounds how much unacknowledged data may be in flight."
+)
+
+
+class StubAdapter:
+    """First draft deliberately violates bloom_level and cites a quote that is not in the passage;
+    the repair draft complies."""
+
+    backend_id = "stub:test"
+
+    def __init__(self):
+        self.calls = 0
+
+    def generate(self, req):
+        self.calls += 1
+        repair = "previous draft violated" in req.user
+        stem = "Explain how TCP congestion control reacts to packet loss." if repair else "List two TCP mechanisms."
+        answer = ("TCP halves the congestion window on loss and re-enters additive growth; slow start doubles the window "
+                  "each round trip until the threshold, and fast retransmit resends after three duplicate acknowledgements.")
+        quote = "When a packet loss is detected the window is halved." if repair else "TCP halves its window on every loss event."
+        return GenerationResult(
+            data={"stem": stem, "answer_key": answer, "options": [], "citations": [{"passage": 1, "quote": quote}]},
+            model_version="stub", temperature=req.temperature, seed=req.seed,
+        )
+
+
+@pytest.fixture(scope="module")
+def client(tmp_path_factory):
+    with psycopg.connect("postgresql://postgres:postgres@localhost:5432/postgres", autocommit=True) as conn:
+        if conn.execute("SELECT 1 FROM pg_database WHERE datname='aqp_test'").fetchone() is None:
+            conn.execute("CREATE DATABASE aqp_test")
+    from app.config import settings
+
+    settings.storage_dir = tmp_path_factory.mktemp("storage")
+    Base.metadata.drop_all(engine)
+    with TestClient(app) as c:
+        yield c
+    Base.metadata.drop_all(engine)
+
+
+@pytest.fixture
+def stub(monkeypatch):
+    adapter = StubAdapter()
+    monkeypatch.setattr(orchestrator, "get_adapter", lambda: adapter)
+    return adapter
+
+
+def login(client, email):
+    return {"Authorization": f"Bearer {client.post('/auth/login', json={'email': email}).json()['token']}"}
+
+
+def test_full_journey(client, stub, tmp_path):
+    coordinator = login(client, "coordinator@example.edu")
+    reviewer = login(client, "reviewer1@example.edu")
+    course_id = client.get("/courses").json()[0]["course_id"]
+
+    # 1-3. upload and ingest a real PDF
+    pdf = tmp_path / "unit1.pdf"
+    doc = pymupdf.open()
+    doc.new_page().insert_textbox(pymupdf.Rect(40, 40, 550, 800), PASSAGE, fontsize=11)
+    doc.save(pdf)
+    with pdf.open("rb") as f:
+        r = client.post(f"/courses/{course_id}/materials", files={"file": ("unit1.pdf", f, "application/pdf")}, headers=coordinator)
+    assert r.status_code == 201, r.text
+    assert r.json()["chunk_count"] >= 1 and r.json()["pages_covered"] == 1
+    assert client.get(f"/courses/{course_id}/materials").json()[0]["chunk_count"] == r.json()["chunk_count"]
+
+    # reviewer cannot upload
+    with pdf.open("rb") as f:
+        assert client.post(f"/courses/{course_id}/materials", files={"file": ("x.pdf", f)}, headers=reviewer).status_code == 403
+
+    # 4. blueprint: draft -> constraints -> validate -> freeze
+    bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    rows = [{"course_outcome": "CO1 Explain transport-layer congestion control", "concept": "TCP congestion control",
+             "bloom_level": "understand", "marks": 5, "question_type": "short_answer", "target_difficulty": "hard"}]
+    client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
+    v = client.post(f"/blueprints/{bp['blueprint_id']}/validate").json()
+    assert not v["ok"] and "inconsistent" in v["issues"][0]
+    assert client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).status_code == 422
+    rows[0]["target_difficulty"] = "easy"
+    client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
+    assert client.post(f"/blueprints/{bp['blueprint_id']}/validate").json() == {
+        "ok": True, "issues": [], "total_marks": 5, "outcomes": {rows[0]["course_outcome"]: 5}}
+    frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
+    assert frozen["version"] == 1 and frozen["frozen_at"]
+    assert client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator).status_code == 409
+
+    # 5-6. generate (background task completes inside TestClient), compliance catches the first draft and repairs it
+    run = client.post(f"/blueprints/{bp['blueprint_id']}/generate", headers=reviewer).json()
+    run = client.get(f"/runs/{run['run_id']}").json()
+    assert run["status"] == "completed", run["error"]
+    assert run["backend_id"] == "stub:test" and len(run["prompt_hash"]) == 64
+    assert run["temperature"] == 0.7 and isinstance(run["seed"], int)
+    assert stub.calls == 2
+
+    # 7. results carry citation with page ref and compliance evidence
+    cands = client.get(f"/runs/{run['run_id']}/candidates").json()
+    assert len(cands) == 1
+    q = cands[0]
+    assert q["state"] == "compliant" and q["repair_attempts"] == 1
+    assert q["citations"][0]["page_ref"] == "p1" and q["citations"][0]["char_span"] != "not_found"
+    assert q["compliance"]["is_compliant"]
+    ev = client.get(f"/candidates/{q['question_id']}/evidence").json()
+    assert len(ev["reports"]) == 2
+    first = {v["field"]: v for v in ev["reports"][0]["violations"]}
+    assert set(first) == {"bloom_level", "grounding"}
+    assert first["bloom_level"]["expected"] == "understand" and first["bloom_level"]["observed"] == "remember"
+    assert first["grounding"]["observed"] == "no citation with a verbatim quote"
+    assert ev["reports"][1]["is_compliant"]
+
+    # 8-9. review: edit with edit distance, then summary
+    assert client.post(f"/candidates/{q['question_id']}/review", json={"decision": "reject"}, headers=reviewer).status_code == 422
+    edited = q["stem"].replace("packet loss", "a lost packet")
+    r = client.post(f"/candidates/{q['question_id']}/review", json={"decision": "edit", "edited_stem": edited}, headers=reviewer).json()
+    assert r["state"] == "edited" and 0 < r["review"]["edit_distance"] < 0.3
+    s = client.get(f"/runs/{run['run_id']}/reviews").json()
+    assert s["edited"] == 1 and s["pending"] == 0 and s["mean_edit_distance"] == r["review"]["edit_distance"]
+
+    # 10. publish with provenance
+    entries = client.post("/candidates/publish", json={"question_ids": [q["question_id"]]}, headers=reviewer).json()
+    assert entries[0]["version"] == 1
+    snap = client.get(f"/bank/entries/{entries[0]['entry_id']}").json()["snapshot"]
+    assert snap["stem"] == edited and snap["original_stem"] == q["stem"]
+    assert snap["blueprint"]["version"] == 1 and snap["run"]["run_id"] == run["run_id"]
+    assert snap["citations"][0]["page_ref"] == "p1" and snap["review"]["decision"] == "edit"
+    assert client.get(f"/runs/{run['run_id']}/candidates").json()[0]["state"] == "published"
+    assert client.post("/candidates/publish", json={"question_ids": [q["question_id"]]}, headers=reviewer).status_code == 409
