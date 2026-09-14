@@ -11,7 +11,7 @@ from ..auth import require_role
 from ..config import settings
 from ..db import get_db
 from ..models import Chunk, Course, Material
-from ..schemas import CourseOut, MaterialOut
+from ..schemas import ChunkOut, CourseOut, MaterialOut
 from ..services import ingestion
 
 router = APIRouter(tags=["materials"])
@@ -67,3 +67,11 @@ def upload_material(course_id: UUID, file: UploadFile, db: Session = Depends(get
 def list_materials(course_id: UUID, db: Session = Depends(get_db)):
     rows = db.scalars(select(Material).where(Material.course_id == course_id).order_by(Material.uploaded_at)).all()
     return [_material_out(db, m) for m in rows]
+
+
+@router.get("/materials/{material_id}/chunks", response_model=list[ChunkOut])
+def preview_chunks(material_id: UUID, limit: int = 5, db: Session = Depends(get_db)):
+    """A few indexed passages, so ingestion is visibly real (plan §7.1 step 3)."""
+    if db.get(Material, material_id) is None:
+        raise HTTPException(404, "material not found")
+    return db.scalars(select(Chunk).where(Chunk.material_id == material_id).order_by(Chunk.page_ref).limit(limit)).all()

@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 from ..auth import require_role
 from ..db import get_db
 from ..models import Blueprint, CandidateQuestion, ComplianceReport, GenerationRun
-from ..schemas import CandidateOut, CitationOut, ComplianceOut, ConstraintOut, EvidenceOut, ReviewOut, RunOut, UserOut, ViolationOut
-from ..services import orchestrator
+from ..schemas import (
+    CandidateOut, CheckOut, CitationOut, ComplianceOut, ConstraintOut, EvidenceOut, ReviewOut, RunOut, UserOut, ViolationOut,
+)
+from ..services import compliance, orchestrator
 
 router = APIRouter(tags=["generation"])
 
@@ -17,14 +19,20 @@ def run_out(run: GenerationRun) -> RunOut:
     return RunOut(
         run_id=run.run_id, blueprint_id=run.blueprint_id, backend_id=run.backend_id, prompt_hash=run.prompt_hash,
         temperature=run.temperature, seed=run.seed, started_at=run.started_at, status=run.status, error=run.error,
-        candidate_count=len(run.candidates),
+        candidate_count=len(run.candidates), constraint_count=len(run.blueprint.constraints),
     )
 
 
 def compliance_out(r: ComplianceReport) -> ComplianceOut:
+    failed = {v.field: v for v in r.violations}
     return ComplianceOut(
         report_id=r.report_id, is_compliant=r.is_compliant, satisfaction_rate=r.satisfaction_rate,
         violations=[ViolationOut(field=v.field, expected=v.expected, observed=v.observed) for v in r.violations],
+        checks=[
+            CheckOut(field=f, passed=f not in failed, expected=failed[f].expected if f in failed else None,
+                     observed=failed[f].observed if f in failed else None)
+            for f in compliance.checked_fields(r.question.constraint)
+        ],
     )
 
 

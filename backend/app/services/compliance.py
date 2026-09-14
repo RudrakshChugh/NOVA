@@ -88,6 +88,14 @@ def _mark_band(marks: int) -> tuple[int, int]:
     return _ABOVE_BAND
 
 
+def checked_fields(constraint) -> list[str]:
+    """Fields the engine checks for this constraint, in report order."""
+    fields = ["bloom_level", "question_type"]
+    if constraint.question_type != "mcq":
+        fields.append("marks")
+    return fields + ["concept", "course_outcome", "grounding"]
+
+
 def check(constraint, stem: str, answer_key: str, options: list[str] | None, best_support: float | None) -> Report:
     violations: list[Violation] = []
     body = f"{stem}\n{answer_key}"

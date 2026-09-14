@@ -9,9 +9,9 @@ backend/                FastAPI + SQLAlchemy + pgvector
   app/models.py         tables from plan.md §8 (+ users)
   app/routers/          endpoints from plan.md §9
   app/services/         ingestion, retrieval, compliance engine, orchestrator, review
-  app/llm/              adapter interface + hosted (Anthropic) adapter
+  app/llm/              adapter interface + Ollama (self-hosted) and Anthropic (hosted) adapters
   tests/test_e2e.py     Day-5 end-to-end journey (stubbed LLM, real Postgres)
-frontend/               React (Vite): login, materials, blueprints, generate & review, bank
+frontend/               React (Vite): 5-step guided flow (upload, blueprint, generate, review, bank)
 storage/                uploaded source files (gitignored)
 ```
 
@@ -45,20 +45,22 @@ Uses database `aqp_test` (created if missing) and a stub LLM adapter.
 
 ## Demo walkthrough (plan.md §7.1)
 
-1. Log in as **Course Coordinator** → *Materials* → upload a PDF/DOCX unit. The table shows
-   chunks indexed and pages covered.
-2. *Blueprints* → New draft → add rows (two course outcomes, mixed Bloom levels and marks) →
-   Save rows → Validate → Freeze as version.
-   To show the compliance check catching a violation, include a row whose Bloom level the model
-   tends to drift from (e.g. `evaluate` on a mostly descriptive passage) — the badge names the
-   violated field and the evidence panel shows the first draft's report before repair.
-3. Log out, log in as **Faculty Reviewer 1** → *Blueprints* → select the frozen version →
-   Generate questions. The run page polls until complete.
-4. Each candidate shows the cited passage with page reference and support score, the compliance
-   badge (or the violated fields with expected/observed), the answer key and repair count.
-5. Accept / Edit (edit distance is computed) / Reject (reason required). The summary updates.
-6. Publish accepted and edited candidates → *Question Bank* → *provenance* shows the snapshot:
-   blueprint version, run id, backend, prompt hash, citations, compliance, reviewer decision.
+The UI is a five-step guided flow; each screen opens with a plain-language "what happens here" and
+the step bar shows which steps are complete and which role performs them.
+
+1. **Upload material** (Course Coordinator) — upload a PDF/DOCX unit. The table shows passages
+   indexed and pages covered; *show sample passages* reveals the indexed text with its page.
+2. **Define blueprint** (Coordinator) — New draft → add rows → *Save & validate* → *Freeze as
+   version*. The field guide explains each column; validation flags inconsistent rows.
+3. **Generate questions** (Faculty Reviewer) — pick the frozen version and *Start generation run*.
+   The screen explains the retrieve → draft → audit → repair pipeline and shows progress.
+4. **Review candidates** (Reviewer) — every card shows the blueprint row, the six checks with
+   pass/fail and expected-vs-found, the draft history (what failed, what was repaired), and the
+   source passages with page numbers and the quoted evidence highlighted. Accept / Edit / Reject,
+   then *Publish* the accepted and edited ones.
+5. **Question bank** — each published question with a readable provenance panel: blueprint
+   version and row, model run (temperature, seed, prompt fingerprint), grounding, checks at
+   publication, reviewer decision.
 
 ## Notes on what is recorded
 

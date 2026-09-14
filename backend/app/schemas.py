@@ -40,6 +40,12 @@ class MaterialOut(BaseModel):
     pages_covered: int  # distinct page refs (pdf pages / docx paragraph windows) with at least one chunk
 
 
+class ChunkOut(BaseModel):
+    chunk_id: UUID
+    page_ref: str
+    text: str
+
+
 class ConstraintIn(BaseModel):
     course_outcome: str = Field(min_length=1)
     concept: str = Field(min_length=1)
@@ -80,6 +86,7 @@ class RunOut(BaseModel):
     status: str
     error: str | None
     candidate_count: int
+    constraint_count: int
 
 
 class CitationOut(BaseModel):
@@ -97,11 +104,19 @@ class ViolationOut(BaseModel):
     observed: str
 
 
+class CheckOut(BaseModel):
+    field: str
+    passed: bool
+    expected: str | None  # populated when the check failed
+    observed: str | None
+
+
 class ComplianceOut(BaseModel):
     report_id: UUID
     is_compliant: bool
     satisfaction_rate: float
     violations: list[ViolationOut]
+    checks: list[CheckOut]  # every check the engine ran on this draft, pass or fail
 
 
 class ReviewOut(BaseModel):
