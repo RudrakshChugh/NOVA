@@ -34,5 +34,16 @@ class Settings(BaseSettings):
     repair_budget: int = 2
     grounding_min_similarity: float = 0.25
 
+    # Novelty engine
+    novelty_enabled: bool = True
+    novelty_shortlist: int = 10  # past questions scored on all four signals per candidate
+    novelty_redraft_budget: int = 1  # redrafts allowed when a draft duplicates a past question
+    novelty_model_path: Path = Path(__file__).resolve().parents[1] / "data" / "models" / "novelty_combiner.json"
+
+    # Reviewer-adapted ranker
+    source_grounded_max_chunks: int = 80  # cap for the whole-material baseline's prompt
+
+    ranker_model_path: Path = Path(__file__).resolve().parents[1] / "data" / "models" / "ranker.json"
+
 
 settings = Settings()

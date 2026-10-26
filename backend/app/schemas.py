@@ -87,6 +87,7 @@ class RunOut(BaseModel):
     error: str | None
     candidate_count: int
     constraint_count: int
+    arm_label: str | None
 
 
 class CitationOut(BaseModel):
@@ -131,7 +132,7 @@ class ReviewOut(BaseModel):
 
 class CandidateOut(BaseModel):
     question_id: UUID
-    run_id: UUID
+    run_id: UUID | None  # withheld in the blinded review queue, which must not identify the arm
     constraint: ConstraintOut
     stem: str
     answer_key: str
@@ -140,6 +141,7 @@ class CandidateOut(BaseModel):
     repair_attempts: int
     citations: list[CitationOut]
     compliance: ComplianceOut | None  # latest report
+    novelty: "NoveltyOut | None"  # latest novelty audit, null when the engine did not run
     review: ReviewOut | None  # latest review
 
 
@@ -165,6 +167,11 @@ class ReviewSummaryOut(BaseModel):
     mean_edit_distance: float | None
 
 
+class StudyLaunchIn(BaseModel):
+    arms: list[str] = Field(min_length=1)
+    seeds: int = Field(default=3, ge=1, le=10)  # plan §3.3.3 runs each condition three times
+
+
 class PublishIn(BaseModel):
     question_ids: list[UUID]
 
@@ -175,3 +182,68 @@ class BankEntryOut(BaseModel):
     version: int
     snapshot: dict
     published_at: datetime
+
+
+# --- Novelty engine ---
+
+
+class PYQPasteIn(BaseModel):
+    year: int = Field(ge=1990, le=2100)
+    label: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
+class PYQOut(BaseModel):
+    pyq_id: UUID
+    number: str | None
+    text: str
+    marks: int | None
+    question_type: str | None
+    bloom_level: str | None
+
+
+class PYQPaperOut(BaseModel):
+    paper_id: UUID
+    year: int
+    label: str
+    filename: str | None
+    source_type: str
+    uploaded_at: datetime
+    question_count: int
+
+
+class NoveltySignalOut(BaseModel):
+    name: str
+    value: float
+    weight: float | None  # combiner coefficient, null while the combiner is unfitted
+
+
+class NoveltyOut(BaseModel):
+    report_id: UUID
+    duplicate_probability: float
+    threshold: float
+    is_duplicate: bool
+    model_version: str
+    signals: list[NoveltySignalOut]
+    nearest_pyq: PYQOut | None
+    nearest_paper: str | None  # "End Semester 2024"
+
+
+class PairBuildIn(BaseModel):
+    positives_per_question: int = Field(default=2, ge=1, le=6)
+    hard_negatives_per_question: int = Field(default=1, ge=0, le=5)
+    easy_negatives_per_question: int = Field(default=1, ge=0, le=5)
+
+
+class DuplicatePairOut(BaseModel):
+    pair_id: UUID
+    pair_key: str
+    left_text: str
+    right_text: str
+    label: bool
+    stratum: str
+    provenance: str
+    split: str
+
+
+CandidateOut.model_rebuild()  # resolves the forward reference to NoveltyOut

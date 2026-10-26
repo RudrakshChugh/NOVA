@@ -1,13 +1,15 @@
 <p align="center">
   <h1 align="center">Assessment-Quality Platform</h1>
   <p align="center">
-    <strong>Blueprint-compliant, source-grounded exam question generation with a rule-based audit layer and a fully provenanced question bank.</strong>
+    <strong>Blueprint-compliant, source-grounded exam question generation — audited for constraint compliance and novelty, ranked by learned reviewer preference, and evaluated against pinned baselines with interval-carrying metrics.</strong>
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/Python-3.14-blue?logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/FastAPI-Backend-teal?logo=fastapi" alt="FastAPI">
     <img src="https://img.shields.io/badge/PostgreSQL-pgvector-336791?logo=postgresql&logoColor=white" alt="pgvector">
     <img src="https://img.shields.io/badge/React-Vite-61dafb?logo=react&logoColor=black" alt="React">
+    <img src="https://img.shields.io/badge/ONNX%20Runtime-Embeddings-005CED" alt="ONNX Runtime">
+    <img src="https://img.shields.io/badge/LightGBM-Ranker-green?logo=lightgbm" alt="LightGBM">
     <img src="https://img.shields.io/badge/LLM-Ollama%20%7C%20Anthropic-orange" alt="LLM adapters">
   </p>
 </p>
@@ -16,87 +18,166 @@
 
 ## Overview
 
-Faculty set exam papers by hand. Each question must map to a course outcome, sit at the right Bloom level, carry the right marks, be answerable from what was taught, and not repeat past papers — and today all of that is verified from memory.
+Faculty set exam papers by hand. Each question must map to a course outcome, sit at the right Bloom level, carry the right marks, be answerable from what was taught, and not repeat a past paper — and today all of that is verified from memory.
 
-Generic AI tools (ChatGPT, NotebookLM, plain RAG) write fluent questions but guarantee none of those properties. They do not check a blueprint, do not cite the taught material, and do not learn from reviewer decisions.
+Generic AI tools (ChatGPT, NotebookLM, plain RAG) write fluent questions but guarantee none of those properties. They do not check a blueprint, do not compare against institutional past papers, and do not learn from reviewer decisions.
 
-This platform generates questions **under explicit constraints** and **audits every draft before a human sees it**. A coordinator freezes a versioned blueprint; the system retrieves passages from the uploaded course material, drafts a candidate through a swappable LLM backend, runs a deterministic compliance engine against every blueprint field, repairs failing drafts, and presents the survivors to reviewers with citations, page references and a pass/fail checklist. Every reviewer decision is recorded, and every published question carries full provenance.
+This platform generates questions **under explicit constraints** and **audits every draft before a human sees it**. A coordinator freezes a versioned blueprint; the system retrieves passages from the uploaded course material, drafts a candidate through a swappable LLM backend, runs a deterministic compliance engine against every blueprint field, scores the draft against the past-year corpus on four independent signals, redrafts whatever fails, and presents the survivors to reviewers with citations, page references, a pass/fail checklist and the novelty breakdown. Every reviewer decision is recorded and becomes training data for the ranker; every published question carries full provenance.
 
-> **Key differentiator:** the LLM never grades its own output. Compliance is rule-based and auditable, grounding is verified verbatim against the source, and the model's sampling parameters, prompt hash and seed are logged per run so results are reproducible.
+> **Key differentiator:** no part of the audit is the generating model's own opinion. Compliance is rule-based and auditable, grounding is verified verbatim against the source, novelty is a fitted model over four signals whose per-signal weight is reported, and the ranker ships only if it beats two floors on held-out review sittings.
 
-This repository is the **prototype** (plan §7): the document-to-question vertical slice on one course. The novelty engine, learned ranker and evaluation harness are specified in [`plan.md`](plan.md) and build on the same pipeline.
+All four engines of [`plan.md`](plan.md) are implemented. What remains is institutional data — real past-year papers and real reviewer sittings — which the roadmap at the end of this file sets out.
 
 ---
 
 ## System Architecture
 
 ```mermaid
-graph TD
-    A[Coordinator uploads PDF / DOCX] --> B[Ingestion: parse, sentence-window chunk, embed]
-    B --> C[(pgvector index)]
-    D[Coordinator freezes versioned blueprint] --> E[Generation Orchestrator]
-    C --> E
-    E --> F[Retrieve top-k passages per constraint]
-    F --> G[LLM adapter drafts question + answer key + citations]
-    G --> H[Blueprint Compliance Engine]
-    H -->|violations and repair budget left| G
-    H --> I[Candidate with checklist, citations, draft history]
-    I --> J[Reviewer: accept / edit / reject]
-    J --> K[(Review record store)]
-    J --> L[(Versioned question bank with provenance)]
+graph TB
+    subgraph SRC["1 - Sources"]
+        S1["Course material<br/>PDF / DOCX"]
+        S2["Past-year papers<br/>PDF or pasted text"]
+        S3["Blueprint rows<br/>validated, frozen as a version"]
+    end
+
+    subgraph ING["2 - Ingestion"]
+        I1["Parse, strip repeated<br/>furniture, tag pages"]
+        I2["5-sentence windows,<br/>stride 3"]
+        I4["Split paper into questions,<br/>parse marks / type / Bloom"]
+        I3["MiniLM via ONNX Runtime<br/>384-d, L2-normalised"]
+    end
+
+    DB[("PostgreSQL + pgvector<br/>passages, past questions, blueprints,<br/>runs, candidates, reviews, models")]
+
+    subgraph GEN["3 - Generation loop, once per blueprint row"]
+        G1["Retrieve top-5 passages<br/>for this constraint"]
+        G2["LLM adapter drafts stem,<br/>answer key and citations"]
+        G3{"Compliance engine<br/>6 deterministic checks"}
+        G4{"Novelty engine<br/>4 signals + fitted combiner"}
+        G5["Reviewer-adapted ranker<br/>LightGBM vs 2 floors"]
+    end
+
+    subgraph REV["4 - Human review"]
+        R1["Queue, open or blinded"]
+        R2["accept / edit / reject<br/>edit distance recorded"]
+    end
+
+    BANK[("Versioned question bank<br/>full provenance")]
+
+    subgraph EV["5 - Evaluation"]
+        E1["7 pinned arms<br/>on shared seeds"]
+        E2["Report: McNemar, Wilson,<br/>bootstrap, NDCG@k, kappa"]
+    end
+
+    S1 --> I1 --> I2 --> I3
+    S2 --> I4 --> I3
+    I3 --> DB
+    S3 --> DB
+
+    DB --> G1 --> G2 --> G3
+    G3 -->|"violation, budget left"| G2
+    G3 -->|"compliant"| G4
+    G4 -->|"duplicate, budget left"| G2
+    G4 -->|"novel"| G5
+    G5 --> R1 --> R2
+    R2 -->|"publish"| BANK
+    R2 -->|"decision stored"| DB
+    DB -.->|"fitted on past sittings"| G5
+
+    E1 -->|"launch"| G1
+    DB --> E2
 
     classDef store fill:#e8f0f8,stroke:#1f4e79,stroke-width:2px,color:#000;
     classDef audit fill:#fff3cd,stroke:#9a6700,stroke-width:2px,color:#000;
     classDef human fill:#d4edda,stroke:#1a7f37,stroke-width:2px,color:#000;
 
-    class C,K,L store;
-    class H audit;
-    class J human;
+    class DB,BANK store;
+    class G3,G4 audit;
+    class R1,R2 human;
 ```
 
-### Compliance and grounding
+Shaded in amber are the two audits that run before any human sees a draft; in green, the only points where a person decides. A failure at either audit returns the draft to the model with the exact failures named, until the repair budget is spent.
+
+### Blueprint compliance
 
 Each draft is checked against the blueprint row it was generated for. Every check is a fixed rule over the text:
 
 | Check | Rule |
 |---|---|
-| `bloom_level` | Keyword/structure Bloom classifier on the stem (earliest cue verb wins) must equal the constraint level |
+| `bloom_level` | Cue-verb classifier on the stem (earliest cue wins, ties go higher) must equal the constraint level |
 | `question_type` | MCQ needs exactly 4 options with the answer among them; non-MCQ must have none; numerical needs numbers in stem and answer |
 | `marks` | Answer-key word count must fall in the band for the mark weighting |
 | `concept` / `course_outcome` | Content words of the constraint must appear in the question or answer |
 | `grounding` | At least one citation whose quoted text is **verbatim** in the cited passage and whose support score clears the floor |
 
-Reported per draft as
-
 $$\text{satisfaction rate} = \frac{\text{checks passed}}{\text{checks run}}$$
 
-and for edited questions
+The first-draft report is preserved through every repair, so the pre-repair satisfaction rate stays measurable.
 
-$$\text{edit distance} = \frac{\text{Levenshtein}(\text{original}, \text{edited})}{\max(|\text{original}|, |\text{edited}|)}$$
+### Novelty auditing
 
-The first-draft report is preserved even after repairs, so the pre-repair constraint satisfaction rate (plan §3.3.6) is measurable.
+A candidate is compared against every past-year question of the course on four independent signals, each in $[0,1]$:
+
+| Signal | What it catches |
+|---|---|
+| **semantic** | Embedding cosine similarity — the same question in different words |
+| **lexical** | Okapi BM25 term overlap, normalised by the query's self-score — copied phrasing |
+| **structural** | Type, marks, Bloom level, and the clause **set** after trimming shared lead-in wording — conditions reordered |
+| **numerical** | Token similarity after masking every number — a question reused with new numbers |
+
+A logistic regression combines them into one duplicate probability:
+
+$$P(\text{duplicate}) = \sigma\Big(\beta_0 + \sum_{s \in \{\text{sem},\text{lex},\text{str},\text{num}\}} \beta_s \cdot x_s\Big)$$
+
+Logistic regression is used rather than a learned ensemble because $\beta_s$ is directly reportable. The fitted model is four coefficients, an intercept and a threshold, stored as JSON — diffable and reviewable. Plan §3.1 names a single embedding threshold as the method this must beat, and the held-out evaluation reports both side by side.
+
+### Reviewer-adapted ranker
+
+Every accept, edit and reject is stored with reviewer, edited text, normalised edit distance and reason. A LightGBM classifier is fitted on **pre-review features only** — compliance scores, novelty signals, grounding, Bloom level, marks, lengths — and used to order future candidates.
+
+$$\text{NDCG@}k = \frac{\sum_{i=1}^{k} \frac{2^{rel_i}-1}{\log_2(i+1)}}{\text{IDCG@}k}, \qquad rel = \begin{cases} 2 & \text{accepted as-is} \\ 1 & \text{edited} \\ 0 & \text{rejected} \end{cases}$$
+
+Models are compared by leave-one-session-out cross-validation, holding out a whole review sitting at a time. **LightGBM ships only if it beats both floors** — a logistic regression over the same features, and a compliance-score-only ranking. Otherwise the simpler model ships and that result is recorded.
+
+### Evaluation protocol
+
+Seven pinned arms run against the same frozen blueprint under the same seeds:
+
+| Arm | Retrieval | Blueprint stated | Compliance enforced | Novelty enforced | Ranked |
+|---|---|---|---|---|---|
+| `full_system` | passages | yes | yes | yes | ranker |
+| `plain_llm` | none | no | no | no | no |
+| `source_grounded` | whole material | no | no | no | no |
+| `fixed_prompt_rag` | passages | no | no | no | no |
+| `ablation_no_blueprint` | passages | yes | **no** | yes | ranker |
+| `ablation_no_novelty` | passages | yes | yes | **no** | ranker |
+| `ablation_no_ranker` | passages | yes | yes | yes | **compliance order** |
+
+Measurement is never switched off — every arm's drafts are still checked and audited, so each has a satisfaction rate and a duplicate rate. What an arm changes is whether a failure sends the draft back. Reviewers judge through a **blinded queue**: questions from all arms shuffled together, order seeded per reviewer, with neither the arm label nor the run id in the response.
 
 ---
 
 ## Results
 
-Prototype run on real course material — a 26-page *Data Flow Diagrams* slide deck — against a frozen 6-row blueprint spanning two course outcomes, Bloom levels *remember → evaluate*, and short-answer / long-answer / MCQ types. Backend `ollama:qwen3:8b` on CPU, temperature 0.7, seed logged.
+### Verification
 
-| Metric | Value |
+| What | Result |
 |---|---|
-| Passages indexed / pages covered | 42 / 26 of 26 |
-| Candidates generated | 6 (one per blueprint row) |
-| LLM drafts including repairs | 10 |
-| Compliant on first draft | 4 / 6 |
-| Compliant after repair budget (2) | 4 / 6 |
-| Violations caught | `bloom_level` ×2, `marks` ×1, `grounding` ×1 (non-verbatim quote) |
-| Wall-clock | 6 min 40 s |
+| Automated tests | **66 passing** — unit tests for every signal, the split rule, the metrics and the selection rule; pipeline tests for ingestion → generation → audit → review → publish, the novelty engine, the ranker, and the evaluation harness |
+| Live run on real course material | 26-page *Data Flow Diagrams* deck → 42 passages, 26/26 pages covered; 6 candidates in 6 min 40 s on a local 8B model; 4/6 compliant, violations caught on `bloom_level`, `marks` and `grounding` |
+| Embedding backend swap | ONNX vectors **bit-identical** to the previous PyTorch vectors across stored chunks (max elementwise difference 0.0) |
+| Novelty engine on real data | 15-question demo paper → 72 labelled pairs → fitted combiner, held-out evaluation run |
 
-One of the two remaining `bloom_level` failures is a **false alarm** — "Balance the following DFD…" is a legitimate apply-level verb that the cue list does not contain — which is exactly the failure mode the plan's qualitative analysis section (§13.2) anticipates. The rule set was deliberately not tuned after seeing this output.
+### The novelty result is not yet a claim
 
-These are figures from a single run with six questions; they demonstrate that the pipeline is real and that the audit catches violations, not a statistical claim. The evaluation protocol (baselines, ablations, blinded reviewers, bootstrap intervals) is defined in `plan.md` §3.3 and is not run in the prototype.
+On the current 14-pair test fold the four-signal combiner scores precision, recall and F1 of 1.000 with interval [1.000, 1.000] — **and so does the single embedding threshold it is supposed to beat**. Both separate the data perfectly, so this measures nothing about the engine.
 
-End-to-end test (`backend/tests/test_e2e.py`) exercises upload → blueprint → generate → audit → repair → review → publish against a real Postgres/pgvector database with a stubbed LLM: **passing**.
+That is the situation plan §5 predicts: 72 pairs built from 15 questions is far below the 300-pair floor, and transformed variants of distinct questions are not hard enough negatives. The honest reading is that the engine is **mechanically verified and statistically untested**. Two things change it, both needing institutional data:
+
+1. **Real past papers across two or more years**, which contain genuinely near-duplicate questions on the same concept — the cases a cosine threshold gets wrong.
+2. **At least 300 labelled pairs**, so the 20% test fold holds 60+ and a bootstrap interval on F1 is narrower than ±0.10.
+
+The strong regularisation the fit selected (C = 0.01, weights 0.03–0.07) is the same symptom: at this sample size every setting ties on validation, so the selection is uninformative rather than wrong. The model card reports the C and the fold sizes so this is visible rather than buried.
 
 ---
 
@@ -104,53 +185,47 @@ End-to-end test (`backend/tests/test_e2e.py`) exercises upload → blueprint →
 
 | Component | What It Does | File |
 |---|---|---|
-| **Blueprint Compliance Engine** | Six deterministic checks per draft, violations named by field / expected / observed; repair loop re-prompts the model with the exact failures. The model never grades itself. | `backend/app/services/compliance.py` |
-| **Verified Grounding** | Retrieval from the coordinator's own material via pgvector; each citation stores the chunk, the quoted character span and a cosine support score. A paraphrased or invented quote does not count. | `backend/app/services/retrieval.py`, `orchestrator.py` |
-| **Slide-aware Ingestion** | Sentence-window chunking that treats bullets and line breaks as boundaries, re-joins wrapped lines and drops repeated footers, so citations resolve to the right page even for slide decks. | `backend/app/services/ingestion.py` |
-| **Swappable LLM Backend** | One adapter interface; self-hosted Ollama (temperature and seed honoured) and hosted Anthropic implementations. Backend id, prompt hash, temperature and seed are logged per run. | `backend/app/llm/` |
-| **Reviewer Record Store** | Every accept / edit / reject stored with reviewer, edited text, normalised edit distance and reason — the training data for the reviewer-adapted ranker (plan §3.1). | `backend/app/routers/reviews.py` |
-| **Provenanced Question Bank** | Publishing snapshots the question with blueprint version, run, citations, compliance report and review decision; re-publishing creates a new version. | `backend/app/routers/bank.py` |
+| **Blueprint Compliance Engine** | Six deterministic checks per draft, violations named by field / expected / observed; repair loop re-prompts with the exact failures. The model never grades itself. | `backend/app/services/compliance.py` |
+| **Multi-signal Novelty Engine** | Four signals scored against the past-year corpus, combined by a logistic regression whose weights are reported; duplicates are redrafted with the repeated question named. | `backend/app/services/novelty/` |
+| **Labelled Pair Construction** | Duplicates built by renumbering, reordering conditions and substituting synonyms, so the label is known by construction; hard negatives mined as the nearest non-duplicates. | `backend/app/services/novelty/pairs.py` |
+| **Immutable Split Rule** | A pair's fold is `hash(seed, pair_key)`, depending on nothing else, so adding pairs can never move an existing one and a split cannot be silently re-drawn. | `backend/app/services/novelty/dataset.py` |
+| **Reviewer-adapted Ranker** | LightGBM over pre-review features only, selected against two floors by leave-one-session-out NDCG@k. | `backend/app/services/ranker/` |
+| **Evaluation Harness** | Seven pinned arms × seeds on one frozen blueprint, blinded review queue, and a report where every figure carries a Wilson or bootstrap interval. | `backend/app/services/evaluation/` |
+| **Verified Grounding** | Each citation stores the quoted character span and a cosine support score; a paraphrased or invented quote counts as no grounding. | `backend/app/services/orchestrator.py` |
+| **Swappable LLM Backend** | One adapter interface; self-hosted Ollama (temperature and seed honoured) and hosted Anthropic. Backend, prompt hash, temperature and seed logged per run. | `backend/app/llm/` |
 
 ---
 
 ## Repository Structure
 
 ```text
-├── plan.md                          # Full project plan: scope, evaluation protocol, schema, roadmap
-├── .env.example                     # Configuration template (copy to backend/.env)
+├── plan.md                              # Project plan: scope, evaluation protocol, schema, roadmap
+├── docs/Project_Report.pdf              # Prototype report
 ├── backend/
 │   ├── requirements.txt
+│   ├── scripts/fetch_embedding_model.py # One-time ONNX model download
+│   ├── data/models/                     # ONNX embedder, fitted combiner, fitted ranker (JSON)
 │   ├── app/
-│   │   ├── main.py                  # FastAPI app, startup (tables + seed course/users)
-│   │   ├── config.py                # Settings (database, LLM backend, retrieval, repair budget)
-│   │   ├── models.py                # Tables from plan.md §8
-│   │   ├── schemas.py               # API request/response models
-│   │   ├── auth.py                  # Session tokens and role checks
-│   │   ├── routers/                 # Endpoints from plan.md §9
-│   │   │   ├── auth.py              #   OIDC login / dev login
-│   │   │   ├── materials.py         #   upload & ingest, passage preview
-│   │   │   ├── blueprints.py        #   draft, constraints, validate, freeze
-│   │   │   ├── runs.py              #   generate, run status, candidates, evidence
-│   │   │   ├── reviews.py           #   accept / edit / reject, summary
-│   │   │   └── bank.py              #   publish, bank listing with provenance
+│   │   ├── main.py  config.py  db.py  models.py  schemas.py  auth.py
+│   │   ├── routers/                     # auth, materials, pyqs, blueprints, runs,
+│   │   │                                #   reviews, bank, novelty, evaluation
 │   │   ├── services/
-│   │   │   ├── ingestion.py         #   PDF/DOCX -> sentence windows -> embeddings
-│   │   │   ├── embeddings.py        #   sentence-transformers (all-MiniLM-L6-v2, 384-d)
-│   │   │   ├── retrieval.py         #   pgvector similarity search
-│   │   │   ├── compliance.py        #   rule-based blueprint checks + Bloom classifier
-│   │   │   ├── orchestrator.py      #   retrieve -> draft -> audit -> repair
-│   │   │   └── review.py            #   normalised Levenshtein distance
-│   │   └── llm/
-│   │       ├── base.py              #   adapter interface
-│   │       ├── ollama_adapter.py    #   self-hosted open-weight backend
-│   │       └── anthropic_adapter.py #   hosted backend
-│   └── tests/test_e2e.py            # End-to-end journey against real Postgres
-├── frontend/                        # React (Vite) — five-step guided UI
-│   └── src/
-│       ├── App.jsx                  # Step bar and navigation
-│       ├── pages/                   # Materials, Blueprints, Generate, Review, Bank, Login
-│       └── components/Candidate.jsx # Checklist, draft history, highlighted source passages
-└── storage/                         # Uploaded source files (git-ignored)
+│   │   │   ├── ingestion.py             #   PDF/DOCX -> sentence windows -> embeddings
+│   │   │   ├── pyq_ingestion.py         #   past paper -> individual questions + metadata
+│   │   │   ├── embeddings.py            #   ONNX Runtime MiniLM, 384-d, L2-normalised
+│   │   │   ├── retrieval.py             #   pgvector similarity search
+│   │   │   ├── compliance.py            #   rule-based blueprint checks + Bloom classifier
+│   │   │   ├── orchestrator.py          #   retrieve -> draft -> audit -> repair, per arm
+│   │   │   ├── review.py                #   normalised Levenshtein distance
+│   │   │   ├── metrics.py               #   bootstrap, Wilson, McNemar, kappa, NDCG
+│   │   │   ├── novelty/                 #   signals, combiner, pairs, dataset, training
+│   │   │   ├── ranker/                  #   features, models, training
+│   │   │   └── evaluation/              #   arms, harness, report
+│   └── tests/                           # 66 tests: unit + four pipeline suites
+└── frontend/src/                        # React: 5-step journey + Engines + Evaluation
+    ├── pages/                           #   Materials, Blueprints, Generate, Review, Bank,
+    │                                    #   Engines, Evaluation, Login
+    └── components/                      #   Candidate (with blinded mode), Stats
 ```
 
 ---
@@ -158,56 +233,155 @@ End-to-end test (`backend/tests/test_e2e.py`) exercises upload → blueprint →
 ## Quick Start
 
 ### 1. Prerequisites
-- PostgreSQL with the [pgvector](https://github.com/pgvector/pgvector) extension, and a database `aqp`
-- Python 3.14, Node 24
-- [Ollama](https://ollama.com) with a pulled model (default `qwen3:8b`), **or** an `ANTHROPIC_API_KEY`
 
-### 2. Install
-```bash
-cp .env.example backend/.env             # set LLM_BACKEND / OLLAMA_MODEL or ANTHROPIC_API_KEY
-cd backend && python -m venv .venv && .venv/Scripts/activate && pip install -r requirements.txt
-cd ../frontend && npm install
+| Needed | Version / note |
+|---|---|
+| PostgreSQL + [pgvector](https://github.com/pgvector/pgvector) | 18 with pgvector 0.8.6; the `vector` extension itself is created by the app at startup |
+| Python | 3.14 |
+| Node | 24 |
+| LLM backend | [Ollama](https://ollama.com) with a pulled model (default `qwen3:8b`) **or** an `ANTHROPIC_API_KEY` |
+
+### 2. One-time install
+
+```powershell
+# from the repository root
+copy .env.example backend\.env           # then set LLM_BACKEND / OLLAMA_MODEL or ANTHROPIC_API_KEY
+
+cd backend
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+python scripts\fetch_embedding_model.py  # one-time, ~90 MB ONNX embedder into data/models/
+
+cd ..\frontend
+npm install
 ```
 
-### 3. Run
-```bash
-cd backend && uvicorn app.main:app --reload --port 8000
-cd frontend && npm run dev                 # http://localhost:5173 (proxies /api -> :8000)
-```
-First start downloads the embedding model. Tables and a seed course with one coordinator and two reviewers are created automatically. Without an OIDC issuer configured, the login screen lists the seeded users.
+On macOS or Linux the activate line is `source .venv/bin/activate`; everything else is identical.
 
-### 4. Walk the five steps
-1. **Upload material** (Coordinator) — PDF/DOCX; see passages indexed and pages covered, preview indexed text.
-2. **Define blueprint** (Coordinator) — add rows, *Save & validate*, *Freeze as version*.
-3. **Generate questions** (Reviewer) — start a run; retrieve → draft → audit → repair per row.
-4. **Review candidates** (Reviewer) — six-check pass/fail tiles, draft history, source passages with highlighted evidence; accept / edit / reject; publish.
-5. **Question bank** — every published question with readable provenance.
+Create the two databases. Tables, the `vector` extension and the seed users are all created on first backend start, so nothing else is needed here:
 
-### 5. Test
-```bash
-cd backend && .venv/Scripts/python -m pytest -q     # uses database aqp_test, stubbed LLM
+```powershell
+psql -U postgres -c "CREATE DATABASE aqp"
+psql -U postgres -c "CREATE DATABASE aqp_test"
 ```
+
+No PyTorch: embeddings run on ONNX Runtime, which keeps the install small and every native binary signed.
+
+---
+
+## Running the Project
+
+Four things have to be up — PostgreSQL, the LLM backend, the API and the dev server. The first two are services that survive a reboot; the last two each hold a terminal.
+
+### 1. PostgreSQL
+
+```powershell
+Get-Service postgresql*                   # expect Status: Running
+Start-Service postgresql-x64-18           # only if it is stopped
+```
+
+### 2. LLM backend
+
+```powershell
+ollama list                               # expect qwen3:8b in the list
+ollama pull qwen3:8b                      # first time only
+```
+
+On Windows the Ollama desktop app keeps the server on `http://localhost:11434`; without it, run `ollama serve` in its own terminal. Skip this step entirely when `LLM_BACKEND=anthropic`.
+
+### 3. Backend API — terminal 1
+
+```powershell
+cd backend
+.\.venv\Scripts\activate
+uvicorn app.main:app --reload --port 8000
+```
+
+### 4. Frontend — terminal 2
+
+```powershell
+cd frontend
+npm run dev
+```
+
+### Where everything is
+
+| | URL |
+|---|---|
+| App | http://localhost:5173 |
+| API docs (OpenAPI, every endpoint callable) | http://localhost:8000/docs |
+| Ollama | http://localhost:11434 |
+
+### Sign in
+
+With `DEV_LOGIN=true` three users are seeded on first start and the email alone logs you in:
+
+| Email | Role | What it can do |
+|---|---|---|
+| `coordinator@example.edu` | coordinator | upload material and past papers, edit and freeze blueprints, fit the engines, launch a study, reveal arm labels |
+| `reviewer1@example.edu` | reviewer | generate, review, publish |
+| `reviewer2@example.edu` | reviewer | the second rater, for the inter-rater kappa |
+
+Set `OIDC_ISSUER` and institutional SSO replaces this; turn `DEV_LOGIN` off when it does.
+
+### The journey
+
+1. **Upload sources** — course material (what questions are written from) and past-year papers (what they are checked against).
+2. **Define blueprint** — add rows, validate, freeze as a version.
+3. **Generate** — retrieve, draft, compliance audit, novelty audit, rank.
+4. **Review** — six-check tiles, draft history, highlighted source passages, novelty breakdown; accept / edit / reject; publish.
+5. **Question bank** — published questions with readable provenance.
+
+**Engines** builds the labelled pair set, fits the novelty combiner and the ranker, and shows their model cards. **Evaluation** launches the arms, serves the blinded queue and renders the report.
+
+### Tests
+
+```powershell
+cd backend
+.\.venv\Scripts\python -m pytest -q                              # 66 tests
+.\.venv\Scripts\python -m pytest -q tests\test_novelty_signals.py  # one suite
+```
+
+Tests run against `aqp_test` with their own model paths and a stubbed LLM, so a test run never touches the `aqp` database or the fitted models the app serves.
+
+### Stopping
+
+`Ctrl-C` in each terminal. PostgreSQL and Ollama stay up as services.
+
+### If something will not start
+
+| Symptom | Cause |
+|---|---|
+| `connection refused` on 5432 | PostgreSQL service is stopped — step 1 |
+| `extension "vector" is not available` | pgvector is not built into this PostgreSQL installation |
+| `FileNotFoundError: ...all-MiniLM-L6-v2-onnx/model.onnx` | `python scripts\fetch_embedding_model.py` has not been run |
+| `connection refused` on 11434 | Ollama is not running — step 2 |
+| Generation sits for minutes | expected: `qwen3:8b` on CPU takes 1-2 min per draft, and `ollama_timeout` allows 900 s |
+| An application control policy blocks a DLL | this stack is deliberately free of PyTorch and PyMuPDF for exactly that reason; do not add them back |
 
 ---
 
 ## Methodology
 
-### Ingestion & Retrieval
-- **Parsing:** PyMuPDF (PDF, page-tagged) and python-docx (Word, paragraph-tagged)
-- **Chunking:** sentence windows of 5 with stride 3; bullets and line breaks act as sentence boundaries; repeated page footers removed
-- **Embeddings:** `all-MiniLM-L6-v2`, L2-normalised, stored in `VECTOR(384)`; retrieval by cosine distance, top-5 per constraint
+### Ingestion & retrieval
+- **Parsing:** pypdf (PDF, page-tagged), python-docx (Word, paragraph-tagged)
+- **Chunking:** 5-sentence windows, stride 3; bullets and line breaks act as sentence boundaries; wrapped lines re-joined; lines repeating on ≥50% of pages removed as furniture
+- **Embeddings:** all-MiniLM-L6-v2 via ONNX Runtime — mean-pooled under the attention mask, L2-normalised, `VECTOR(384)`
+- **Retrieval:** cosine distance in pgvector, top-5 per constraint, query = `"{concept}. {course_outcome}"`
 
-### Generation
-- Fixed system + user prompt templates (SHA-256 logged as `prompt_hash`)
-- JSON-schema constrained output: stem, answer key, options, citations (passage number + exact quote)
-- Repair loop re-prompts with the violated field, expected and observed values; budget 2
+### Past-year corpus
+Rule-based splitting on question numbering (`1.`, `Q1`, `1 a)`, `(a)`, `iii)`) with marks parsed off the stem; type and Bloom level inferred for the structural signal. Papers whose layout defeats the splitter can be pasted as text, and the extraction is shown back for checking before it is used.
 
-### Compliance
-- Bloom classifier: committed cue-verb lists per level; earliest cue in the stem decides, ties go to the higher level
-- `target_difficulty` has no deterministic rule on a candidate, so it is validated for consistency with `bloom_level` at blueprint-validation time instead
+### Protocol guarantees in code
+- Fold assignment is a pure function of the pair and the committed seed — **adding pairs never moves an existing pair**
+- Training reads the train and validation folds only; the **test fold is behind its own endpoint** and every access is counted and reported
+- Ranker features are listed explicitly and asserted leakage-free in tests
+- Undefined statistics serialise as `null`, never as `0` or `NaN`
+- A difference whose interval includes zero is reported as *no significant difference*
 
 ### Reproducibility
-- `generation_runs` stores backend id, prompt hash, temperature and seed. Ollama honours temperature and seed; the Anthropic adapter logs both as `NULL` because current Claude models reject sampling parameters and the API has no seed — a value the backend did not honour is never recorded.
+`generation_runs` stores backend id, prompt hash, temperature, seed and arm label. Ollama honours temperature and seed; the Anthropic adapter logs both as `NULL` because current Claude models reject sampling parameters and the API has no seed — a value the backend did not honour is never recorded.
 
 ---
 
@@ -217,21 +391,27 @@ cd backend && .venv/Scripts/python -m pytest -q     # uses database aqp_test, st
 |---|---|
 | Backend API | FastAPI, SQLAlchemy 2, psycopg 3 |
 | Database | PostgreSQL 18 + pgvector 0.8.6 |
-| Parsing | PyMuPDF, python-docx |
-| Embeddings | sentence-transformers |
+| Parsing | pypdf, python-docx |
+| Embeddings | ONNX Runtime + HuggingFace tokenizers (all-MiniLM-L6-v2) |
+| Models | scikit-learn (logistic regression), LightGBM (ranker) |
+| Statistics | Bootstrap, Wilson score, exact McNemar, Cohen's kappa, NDCG — implemented in `services/metrics.py` |
 | LLM | Ollama (qwen3:8b) · Anthropic SDK, behind one adapter interface |
-| Auth | Authlib (OIDC) with a seeded dev login |
 | Frontend | React 19, Vite |
-| Tests | pytest + FastAPI TestClient against real Postgres |
+| Tests | pytest + FastAPI TestClient against real PostgreSQL |
 
 ---
 
-## Roadmap (plan.md §11)
+## Roadmap
 
-- **Novelty engine** — cosine + BM25 + structural + numerical signals over past-year questions, combined by logistic regression; wired after the compliance step
-- **Reviewer-adapted ranker** — LightGBM on review records with pre-review features only, shipped only if it beats logistic-regression and compliance-only floors
-- **Evaluation harness** — plain-LLM, source-grounded and fixed-prompt-RAG baselines; three ablations; blinded reviewers; three seeds per constraint; bootstrap confidence intervals
-- **Self-hosted path parity** — verify identical pipeline behaviour across backends on the same seed
+The code for every engine is in place. What it needs now is data.
+
+1. **Real past-year papers**, two years or more, replacing the demo paper currently in the database.
+2. **300+ labelled pairs**, so the novelty engine's held-out numbers can distinguish it from the single-threshold baseline.
+3. **Reviewer sittings** — at least three per course before the ranker's comparison means anything.
+4. **A blinded evaluation study** across all seven arms with three seeds, then the report.
+5. **Human citation judgement** on the 50-citation sample the report already draws.
+6. **Alembic**, once the evaluation data matters, replacing the startup schema patches in `db.py`.
+7. **Qualitative failure analysis** (plan §13.2): the hardest true positive, the most instructive false positive and false negative, per engine.
 
 ---
 

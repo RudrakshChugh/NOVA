@@ -7,7 +7,7 @@ from sqlalchemy import select
 from .config import settings
 from .db import SessionLocal, init_db
 from .models import Course, User
-from .routers import auth, bank, blueprints, materials, reviews, runs
+from .routers import auth, bank, blueprints, evaluation, materials, novelty, pyqs, reviews, runs
 
 # Prototype scope (plan §2, §7): one course, one coordinator, two faculty reviewers.
 SEED_USERS = [
@@ -39,5 +39,5 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Assessment-Quality Platform (prototype)", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
 
-for r in (auth, materials, blueprints, runs, reviews, bank):
+for r in (auth, materials, pyqs, blueprints, runs, reviews, bank, novelty, evaluation):
     app.include_router(r.router)

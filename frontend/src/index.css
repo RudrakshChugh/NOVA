@@ -86,3 +86,4 @@ mark { background: #fff2a8; padding: 0 1px; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; }
 .legend { display: grid; grid-template-columns: 150px 1fr; gap: 3px 10px; font-size: 13px; }
 .legend dt { font-weight: 600; } .legend dd { margin: 0; color: var(--muted); }
+.mono { font-family: Consolas, "Courier New", monospace; font-size: 13px; }

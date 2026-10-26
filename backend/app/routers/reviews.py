@@ -25,7 +25,13 @@ def review(question_id: UUID, body: ReviewIn, user: User = Depends(require_role(
     if q.run.status != "completed":
         raise HTTPException(409, "generation run has not completed")
 
-    record = ReviewRecord(question_id=q.question_id, reviewer_id=user.user_id, decision=body.decision, reason=body.reason)
+    # A candidate carrying an arm label belongs to an evaluation study, where the review interface
+    # never shows which arm produced it. The flag records that condition rather than trusting the
+    # client to declare it (plan §3.3.4).
+    record = ReviewRecord(
+        question_id=q.question_id, reviewer_id=user.user_id, decision=body.decision,
+        reason=body.reason, blinded=q.arm_label is not None,
+    )
     if body.decision == "edit":
         if not body.edited_stem or body.edited_stem.strip() == q.stem:
             raise HTTPException(422, "edit requires an edited_stem different from the original")

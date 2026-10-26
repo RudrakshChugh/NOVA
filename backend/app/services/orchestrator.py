@@ -6,6 +6,7 @@ import hashlib
 import random
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -20,13 +21,27 @@ from ..models import (
     ConstraintViolation,
     GenerationRun,
     GroundingCitation,
+    Material,
 )
-from . import compliance, retrieval
+from . import compliance, novelty, retrieval
+from .evaluation.arms import Arm, get as get_arm
 
 SYSTEM_PROMPT = """You are an examination question setter. You write one exam question strictly from the
 provided course passages. Every fact the question relies on must come from the passages. Cite the
 passages you used by their number and quote the exact supporting sentence. Do not invent content
 that is not in the passages."""
+
+UNGROUNDED_SYSTEM_PROMPT = """You are an examination question setter. You write one exam question on the
+topic you are given. Return an empty citation list, because no source passages have been provided."""
+
+# Used by the arms that are told only the topic (plan §3.3.2): the model still has to know what to
+# write about, but nothing about the Bloom level, marks or question type is stated.
+TOPIC_TEMPLATE = """Topic:
+- course outcome: {course_outcome}
+- concept: {concept}
+
+Write one exam question on this topic, with a complete answer key.
+{passages_block}"""
 
 USER_TEMPLATE = """Blueprint constraint:
 - course outcome: {course_outcome}
@@ -37,7 +52,7 @@ USER_TEMPLATE = """Blueprint constraint:
 - target difficulty: {target_difficulty}
 
 {type_rules}
-{repair_block}
+{repair_block}{novelty_block}
 Course passages:
 {passages}
 
@@ -73,15 +88,43 @@ OUTPUT_SCHEMA = {
 
 
 def prompt_hash() -> str:
-    return hashlib.sha256((SYSTEM_PROMPT + USER_TEMPLATE).encode()).hexdigest()
+    """Fingerprint of every prompt template, so a run records exactly which prompts produced it."""
+    joined = SYSTEM_PROMPT + UNGROUNDED_SYSTEM_PROMPT + USER_TEMPLATE + TOPIC_TEMPLATE
+    return hashlib.sha256(joined.encode()).hexdigest()
 
 
-def _build_user_prompt(c: BlueprintConstraint, passages: list[Chunk], violations: list[compliance.Violation]) -> str:
+def _render_passages(passages: list[Chunk]) -> str:
+    return "\n\n".join(f"[{i}] ({ch.page_ref}) {ch.text}" for i, ch in enumerate(passages, start=1))
+
+
+def _build_user_prompt(
+    c: BlueprintConstraint,
+    passages: list[Chunk],
+    violations: list[compliance.Violation],
+    duplicate_of: str | None = None,
+    arm: Arm | None = None,
+) -> str:
+    """The prompt for one draft. Which blocks appear is the arm's doing, so a baseline differs
+    from the full system only in what it is told, not in which model or templates it uses."""
+    arm = arm or get_arm(None)
+    if not arm.blueprint_in_prompt:
+        block = f"Course passages:\n{_render_passages(passages)}" if passages else ""
+        return TOPIC_TEMPLATE.format(
+            course_outcome=c.course_outcome, concept=c.concept, passages_block=block
+        )
+
     repair_block = ""
     if violations:
         lines = "\n".join(f"- {v.field}: expected {v.expected}; previous draft had {v.observed}" for v in violations)
         repair_block = f"The previous draft violated the blueprint. Fix every item below:\n{lines}\n"
-    rendered = "\n\n".join(f"[{i}] ({ch.page_ref}) {ch.text}" for i, ch in enumerate(passages, start=1))
+    novelty_block = ""
+    if duplicate_of:
+        novelty_block = (
+            "The previous draft repeats a question that has already been set in a past paper:\n"
+            f'"{duplicate_of}"\n'
+            "Write a different question for the same constraint. Changing only the wording or the "
+            "numbers is not enough: ask about a different aspect of the concept.\n"
+        )
     return USER_TEMPLATE.format(
         course_outcome=c.course_outcome,
         concept=c.concept,
@@ -91,7 +134,8 @@ def _build_user_prompt(c: BlueprintConstraint, passages: list[Chunk], violations
         target_difficulty=c.target_difficulty,
         type_rules=TYPE_RULES[c.question_type],
         repair_block=repair_block,
-        passages=rendered,
+        novelty_block=novelty_block,
+        passages=_render_passages(passages),
     )
 
 
@@ -125,19 +169,64 @@ def _record_report(db: Session, q: CandidateQuestion, rep: compliance.Report) ->
         db.add(ConstraintViolation(report_id=report.report_id, field=v.field, expected=v.expected, observed=v.observed))
 
 
-def _generate_for_constraint(db: Session, run: GenerationRun, c: BlueprintConstraint, course_id: UUID) -> None:
+def _passages_for(db: Session, c: BlueprintConstraint, course_id: UUID, arm: Arm) -> list[Chunk]:
+    """What the model is grounded in under this arm: retrieved passages, the whole indexed
+    material, or nothing at all."""
+    if arm.full_material:
+        return list(
+            db.scalars(
+                select(Chunk)
+                .join(Material, Material.material_id == Chunk.material_id)
+                .where(Material.course_id == course_id)
+                .order_by(Chunk.page_ref)
+                .limit(settings.source_grounded_max_chunks)
+            ).all()
+        )
+    if arm.retrieval:
+        query = f"{c.concept}. {c.course_outcome}"
+        return [ch for ch, _ in retrieval.search(db, course_id, query, settings.retrieval_top_k)]
+    return []
+
+
+def _generate_for_constraint(
+    db: Session,
+    run: GenerationRun,
+    c: BlueprintConstraint,
+    course_id: UUID,
+    corpus: novelty.Corpus | None,
+    arm: Arm,
+) -> None:
+    """Draft, measure, and — where the arm enforces an audit — redraft with the failure named.
+
+    Both audits always run and are always recorded, whatever the arm: an arm that does not enforce
+    an audit still needs its constraint satisfaction rate and its duplicate rate measured, which is
+    what the ablation comparison is made of. What the arm controls is whether a failure sends the
+    draft back and whether it keeps the candidate from reaching a reviewer.
+    """
     adapter = get_adapter()
-    passages = [ch for ch, _ in retrieval.search(db, course_id, f"{c.concept}. {c.course_outcome}", settings.retrieval_top_k)]
-    q = CandidateQuestion(run_id=run.run_id, constraint_id=c.constraint_id, stem="", answer_key="", state="drafted")
+    passages = _passages_for(db, c, course_id, arm)
+    system = SYSTEM_PROMPT if passages else UNGROUNDED_SYSTEM_PROMPT
+    q = CandidateQuestion(
+        run_id=run.run_id, constraint_id=c.constraint_id, stem="", answer_key="",
+        state="drafted", arm_label=run.arm_label,
+    )
     db.add(q)
     db.flush()
 
     violations: list[compliance.Violation] = []
-    for attempt in range(settings.repair_budget + 1):
+    duplicate_of: str | None = None
+    repairs_used = novelty_redrafts_used = 0
+    max_attempts = 1
+    if arm.enforce_compliance:
+        max_attempts += settings.repair_budget
+    if arm.enforce_novelty and corpus is not None:
+        max_attempts += settings.novelty_redraft_budget
+
+    for attempt in range(max_attempts):
         result = adapter.generate(
             GenerationRequest(
-                system=SYSTEM_PROMPT,
-                user=_build_user_prompt(c, passages, violations),
+                system=system,
+                user=_build_user_prompt(c, passages, violations, duplicate_of, arm),
                 json_schema=OUTPUT_SCHEMA,
                 temperature=run.temperature,
                 seed=run.seed,
@@ -152,11 +241,35 @@ def _generate_for_constraint(db: Session, run: GenerationRun, c: BlueprintConstr
         best = _attach_citations(db, q, passages, data["citations"])
         rep = compliance.check(c, q.stem, q.answer_key, q.options, best)
         _record_report(db, q, rep)
-        q.state = "compliant" if rep.is_compliant else "violating"
-        db.commit()
-        if rep.is_compliant:
+        violations, duplicate_of = rep.violations, None
+
+        if arm.enforce_compliance and not rep.is_compliant:
+            q.state = "violating"
+            db.commit()
+            if repairs_used < settings.repair_budget:
+                repairs_used += 1
+                continue
             break
-        violations = rep.violations
+
+        if corpus is None:
+            q.state = "novel"
+            db.commit()
+            break
+
+        report = novelty.audit(db, q, corpus)
+        if arm.enforce_novelty and report.is_duplicate:
+            q.state = "duplicate"
+            db.commit()
+            if novelty_redrafts_used < settings.novelty_redraft_budget:
+                novelty_redrafts_used += 1
+                duplicate_of = report.nearest_pyq.text if report.nearest_pyq else None
+                violations = []
+                continue
+            break
+
+        q.state = "novel"
+        db.commit()
+        break
 
 
 def execute_run(run_id: UUID) -> None:
@@ -164,9 +277,13 @@ def execute_run(run_id: UUID) -> None:
     db = SessionLocal()
     try:
         run = db.get(GenerationRun, run_id)
+        arm = get_arm(run.arm_label)
         bp = db.get(Blueprint, run.blueprint_id)
+        corpus = novelty.build_corpus(db, bp.course_id) if settings.novelty_enabled else None
+        if corpus is not None and corpus.is_empty:
+            corpus = None  # nothing to compare against; the run records this on each candidate
         for c in bp.constraints:
-            _generate_for_constraint(db, run, c, bp.course_id)
+            _generate_for_constraint(db, run, c, bp.course_id, corpus, arm)
         run.status = "completed"
         db.commit()
     except Exception as e:  # surfaced on GET /runs/{id}
@@ -178,10 +295,17 @@ def execute_run(run_id: UUID) -> None:
         db.close()
 
 
-def start_run(db: Session, bp: Blueprint) -> GenerationRun:
+def start_run(
+    db: Session, bp: Blueprint, arm_label: str | None = None, seed: int | None = None
+) -> GenerationRun:
+    """`arm_label` is null for normal use and names the baseline or ablation during an evaluation.
+    `seed` is supplied by the evaluation harness so a condition can be repeated under different
+    seeds (plan §3.3.3); otherwise one is drawn and recorded."""
     run = GenerationRun(
-        blueprint_id=bp.blueprint_id, backend_id=get_adapter().backend_id, prompt_hash=prompt_hash(), status="running",
-        temperature=settings.generation_temperature, seed=random.SystemRandom().randrange(2**31),
+        blueprint_id=bp.blueprint_id, backend_id=get_adapter().backend_id, prompt_hash=prompt_hash(),
+        status="running", temperature=settings.generation_temperature,
+        seed=seed if seed is not None else random.SystemRandom().randrange(2**31),
+        arm_label=arm_label,
     )
     db.add(run)
     db.commit()

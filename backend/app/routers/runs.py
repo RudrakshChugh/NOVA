@@ -6,11 +6,12 @@ from sqlalchemy.orm import Session
 
 from ..auth import require_role
 from ..db import get_db
-from ..models import Blueprint, CandidateQuestion, ComplianceReport, GenerationRun
+from ..models import Blueprint, CandidateQuestion, ComplianceReport, GenerationRun, NoveltyReport
 from ..schemas import (
-    CandidateOut, CheckOut, CitationOut, ComplianceOut, ConstraintOut, EvidenceOut, ReviewOut, RunOut, UserOut, ViolationOut,
+    CandidateOut, CheckOut, CitationOut, ComplianceOut, ConstraintOut, EvidenceOut, NoveltyOut,
+    NoveltySignalOut, PYQOut, ReviewOut, RunOut, UserOut, ViolationOut,
 )
-from ..services import compliance, orchestrator
+from ..services import compliance, orchestrator, ranker
 
 router = APIRouter(tags=["generation"])
 
@@ -20,6 +21,7 @@ def run_out(run: GenerationRun) -> RunOut:
         run_id=run.run_id, blueprint_id=run.blueprint_id, backend_id=run.backend_id, prompt_hash=run.prompt_hash,
         temperature=run.temperature, seed=run.seed, started_at=run.started_at, status=run.status, error=run.error,
         candidate_count=len(run.candidates), constraint_count=len(run.blueprint.constraints),
+        arm_label=run.arm_label,
     )
 
 
@@ -36,6 +38,16 @@ def compliance_out(r: ComplianceReport) -> ComplianceOut:
     )
 
 
+def novelty_out(r: NoveltyReport) -> NoveltyOut:
+    return NoveltyOut(
+        report_id=r.report_id, duplicate_probability=r.duplicate_probability, threshold=r.threshold,
+        is_duplicate=r.is_duplicate, model_version=r.model_version,
+        signals=[NoveltySignalOut(name=s.name, value=s.value, weight=s.weight) for s in r.signals],
+        nearest_pyq=PYQOut.model_validate(r.nearest_pyq, from_attributes=True) if r.nearest_pyq else None,
+        nearest_paper=f"{r.nearest_pyq.paper.label} ({r.nearest_pyq.paper.year})" if r.nearest_pyq else None,
+    )
+
+
 def citations_out(q: CandidateQuestion) -> list[CitationOut]:
     return [
         CitationOut(citation_id=c.citation_id, chunk_id=c.chunk_id, page_ref=c.chunk.page_ref, text=c.chunk.text,
@@ -44,14 +56,17 @@ def citations_out(q: CandidateQuestion) -> list[CitationOut]:
     ]
 
 
-def candidate_out(q: CandidateQuestion) -> CandidateOut:
+def candidate_out(q: CandidateQuestion, reveal_arm: bool = True) -> CandidateOut:
+    """`reveal_arm=False` also withholds the run id: during a blinded evaluation the reviewer must
+    not be able to follow it back to the arm that produced the question (plan §3.3.4)."""
     latest_review = max(q.reviews, key=lambda r: r.reviewed_at, default=None)
     return CandidateOut(
-        question_id=q.question_id, run_id=q.run_id,
+        question_id=q.question_id, run_id=q.run_id if reveal_arm else None,
         constraint=ConstraintOut.model_validate(q.constraint, from_attributes=True),
         stem=q.stem, answer_key=q.answer_key, options=q.options, state=q.state, repair_attempts=q.repair_attempts,
         citations=citations_out(q),
         compliance=compliance_out(q.reports[-1]) if q.reports else None,
+        novelty=novelty_out(q.novelty_reports[-1]) if q.novelty_reports else None,
         review=ReviewOut(
             record_id=latest_review.record_id, reviewer=UserOut.model_validate(latest_review.reviewer, from_attributes=True),
             decision=latest_review.decision, edited_stem=latest_review.edited_stem, edit_distance=latest_review.edit_distance,
@@ -92,10 +107,10 @@ def get_run_status(run_id: UUID, db: Session = Depends(get_db)):
 
 @router.get("/runs/{run_id}/candidates", response_model=list[CandidateOut])
 def list_candidates(run_id: UUID, db: Session = Depends(get_db)):
-    """Ordered by blueprint position, then compliance (the ranker is a stub in the prototype, plan §7.2)."""
+    """Ranked by the reviewer-adapted ranker when one is fitted; otherwise blueprint order with
+    the candidates that survived both audits first."""
     run = get_run(db, run_id)
-    ordered = sorted(run.candidates, key=lambda q: (q.constraint.position, q.state != "compliant"))
-    return [candidate_out(q) for q in ordered]
+    return [candidate_out(q) for q in ranker.order(list(run.candidates))]
 
 
 @router.get("/candidates/{question_id}/evidence", response_model=EvidenceOut)

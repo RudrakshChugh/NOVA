@@ -9,8 +9,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-import pymupdf
 from docx import Document
+from pypdf import PdfReader
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -51,8 +51,7 @@ def _sentences_from_lines(lines: list[str], page_ref: str) -> list[Sentence]:
 
 
 def parse_pdf(path: Path) -> list[Sentence]:
-    with pymupdf.open(path) as doc:
-        pages = [_lines(page.get_text()) for page in doc]
+    pages = [_lines(page.extract_text() or "") for page in PdfReader(str(path)).pages]
     if len(pages) >= 4:
         freq = Counter(line for lines in pages for line in set(lines))
         boilerplate = {line for line, n in freq.items() if n >= _BOILERPLATE_PAGE_FRACTION * len(pages)}

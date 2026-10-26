@@ -1,5 +1,5 @@
-"""ORM tables. Mirrors plan.md §8 (prototype tables) plus `users`, which
-review_records.reviewer_id references."""
+"""ORM tables. Mirrors plan.md §8 plus `users` (referenced by review_records.reviewer_id)
+and the novelty-engine tables the full system needs."""
 
 import uuid
 from datetime import datetime
@@ -88,6 +88,10 @@ class GenerationRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     status: Mapped[str] = mapped_column(Text)  # running | completed | failed
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Null for normal platform use; the baseline or ablation name during an evaluation run. Plan
+    # §8 puts this on candidates, which inherit it; a run executes exactly one arm, so it is
+    # recorded here too and the harness can group by it without joining.
+    arm_label: Mapped[str | None] = mapped_column(Text, nullable=True)
     blueprint: Mapped[Blueprint] = relationship()
     candidates: Mapped[list["CandidateQuestion"]] = relationship(back_populates="run")
 
@@ -108,6 +112,9 @@ class CandidateQuestion(Base):
     citations: Mapped[list["GroundingCitation"]] = relationship(back_populates="question")
     reports: Mapped[list["ComplianceReport"]] = relationship(
         back_populates="question", order_by="ComplianceReport.created_at"
+    )
+    novelty_reports: Mapped[list["NoveltyReport"]] = relationship(
+        back_populates="question", order_by="NoveltyReport.created_at"
     )
     reviews: Mapped[list["ReviewRecord"]] = relationship(back_populates="question")
 
@@ -166,3 +173,98 @@ class QuestionBankEntry(Base):
     version: Mapped[int] = mapped_column(Integer)
     snapshot: Mapped[dict] = mapped_column(JSONB)
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# --- Novelty engine (plan §3.1): past-year corpus, audit reports, labelled pair set ---
+
+
+class PYQPaper(Base):
+    """One uploaded past-year question paper."""
+
+    __tablename__ = "pyq_papers"
+    paper_id: Mapped[uuid.UUID] = _uuid_pk()
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.course_id"))
+    year: Mapped[int] = mapped_column(Integer)
+    label: Mapped[str] = mapped_column(Text)  # e.g. "End Semester 2024"
+    filename: Mapped[str | None] = mapped_column(Text, nullable=True)  # null when pasted as text
+    source_type: Mapped[str] = mapped_column(Text)  # pdf | docx | text
+    stored_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    questions: Mapped[list["PYQ"]] = relationship(back_populates="paper", cascade="all, delete-orphan")
+
+
+class PYQ(Base):
+    """One historical question, with the metadata the structural signal compares."""
+
+    __tablename__ = "pyqs"
+    pyq_id: Mapped[uuid.UUID] = _uuid_pk()
+    paper_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pyq_papers.paper_id"))
+    number: Mapped[str | None] = mapped_column(Text, nullable=True)  # "1", "2b", ...
+    text: Mapped[str] = mapped_column(Text)
+    marks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    question_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bloom_level: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding = mapped_column(Vector(384))
+    paper: Mapped[PYQPaper] = relationship(back_populates="questions")
+
+
+class NoveltyReport(Base):
+    """Novelty audit of one candidate draft against the PYQ corpus."""
+
+    __tablename__ = "novelty_reports"
+    report_id: Mapped[uuid.UUID] = _uuid_pk()
+    question_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("candidate_questions.question_id"))
+    nearest_pyq_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pyqs.pyq_id"), nullable=True)
+    duplicate_probability: Mapped[float] = mapped_column(Float)
+    threshold: Mapped[float] = mapped_column(Float)
+    is_duplicate: Mapped[bool] = mapped_column(Boolean)
+    model_version: Mapped[str] = mapped_column(Text)  # combiner identity, or "untrained" fallback
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    question: Mapped["CandidateQuestion"] = relationship(back_populates="novelty_reports")
+    nearest_pyq: Mapped[PYQ | None] = relationship()
+    signals: Mapped[list["NoveltySignal"]] = relationship(back_populates="report", cascade="all, delete-orphan")
+
+
+class NoveltySignal(Base):
+    """Per-signal breakdown behind a novelty report (semantic, lexical, structural, numerical)."""
+
+    __tablename__ = "novelty_signals"
+    signal_id: Mapped[uuid.UUID] = _uuid_pk()
+    report_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("novelty_reports.report_id"))
+    name: Mapped[str] = mapped_column(Text)
+    value: Mapped[float] = mapped_column(Float)
+    weight: Mapped[float | None] = mapped_column(Float, nullable=True)  # combiner coefficient, when trained
+    report: Mapped[NoveltyReport] = relationship(back_populates="signals")
+
+
+class DuplicatePair(Base):
+    """Labelled question pair for fitting and evaluating the novelty combiner (plan §5)."""
+
+    __tablename__ = "duplicate_pairs"
+    pair_id: Mapped[uuid.UUID] = _uuid_pk()
+    pair_key: Mapped[str] = mapped_column(Text, unique=True)  # stable hash of the two texts; split is keyed on this
+    left_text: Mapped[str] = mapped_column(Text)
+    right_text: Mapped[str] = mapped_column(Text)
+    left_pyq_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pyqs.pyq_id"), nullable=True)
+    right_pyq_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pyqs.pyq_id"), nullable=True)
+    label: Mapped[bool] = mapped_column(Boolean)  # true = duplicate
+    stratum: Mapped[str] = mapped_column(Text)  # surface | hard
+    provenance: Mapped[str] = mapped_column(Text)  # transform name, "sampled", "hard_negative", "human"
+    split: Mapped[str] = mapped_column(Text)  # train | val | test
+    verified_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.user_id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModelVersion(Base):
+    """A fitted novelty combiner or ranker, with the metrics it was accepted on."""
+
+    __tablename__ = "model_versions"
+    model_id: Mapped[uuid.UUID] = _uuid_pk()
+    kind: Mapped[str] = mapped_column(Text)  # novelty | ranker
+    algorithm: Mapped[str] = mapped_column(Text)  # logistic_regression | lightgbm | compliance_only
+    version: Mapped[int] = mapped_column(Integer)
+    params: Mapped[dict] = mapped_column(JSONB)
+    metrics: Mapped[dict] = mapped_column(JSONB)
+    artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    trained_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

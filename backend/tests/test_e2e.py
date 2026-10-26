@@ -5,20 +5,12 @@ table write are exercised. The LLM adapter is stubbed so the test is determinist
 not need an API key; live generation is verified manually against the hosted backend.
 """
 
-import os
-
-import pymupdf
 import pytest
 
-os.environ["DATABASE_URL"] = "postgresql+psycopg://postgres:postgres@localhost:5432/aqp_test"
+from app.llm.base import GenerationResult
+from app.services import orchestrator
 
-import psycopg  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.db import Base, engine  # noqa: E402
-from app.llm.base import GenerationResult  # noqa: E402
-from app.main import app  # noqa: E402
-from app.services import orchestrator  # noqa: E402
+from .conftest import login, write_pdf
 
 PASSAGE = (
     "Congestion control in TCP limits the sending rate when the network is overloaded. "
@@ -53,29 +45,11 @@ class StubAdapter:
         )
 
 
-@pytest.fixture(scope="module")
-def client(tmp_path_factory):
-    with psycopg.connect("postgresql://postgres:postgres@localhost:5432/postgres", autocommit=True) as conn:
-        if conn.execute("SELECT 1 FROM pg_database WHERE datname='aqp_test'").fetchone() is None:
-            conn.execute("CREATE DATABASE aqp_test")
-    from app.config import settings
-
-    settings.storage_dir = tmp_path_factory.mktemp("storage")
-    Base.metadata.drop_all(engine)
-    with TestClient(app) as c:
-        yield c
-    Base.metadata.drop_all(engine)
-
-
 @pytest.fixture
 def stub(monkeypatch):
     adapter = StubAdapter()
     monkeypatch.setattr(orchestrator, "get_adapter", lambda: adapter)
     return adapter
-
-
-def login(client, email):
-    return {"Authorization": f"Bearer {client.post('/auth/login', json={'email': email}).json()['token']}"}
 
 
 def test_full_journey(client, stub, tmp_path):
@@ -84,10 +58,7 @@ def test_full_journey(client, stub, tmp_path):
     course_id = client.get("/courses").json()[0]["course_id"]
 
     # 1-3. upload and ingest a real PDF
-    pdf = tmp_path / "unit1.pdf"
-    doc = pymupdf.open()
-    doc.new_page().insert_textbox(pymupdf.Rect(40, 40, 550, 800), PASSAGE, fontsize=11)
-    doc.save(pdf)
+    pdf = write_pdf(tmp_path / "unit1.pdf", PASSAGE)
     with pdf.open("rb") as f:
         r = client.post(f"/courses/{course_id}/materials", files={"file": ("unit1.pdf", f, "application/pdf")}, headers=coordinator)
     assert r.status_code == 201, r.text
@@ -126,7 +97,8 @@ def test_full_journey(client, stub, tmp_path):
     cands = client.get(f"/runs/{run['run_id']}/candidates").json()
     assert len(cands) == 1
     q = cands[0]
-    assert q["state"] == "compliant" and q["repair_attempts"] == 1
+    assert q["state"] == "novel" and q["repair_attempts"] == 1
+    assert q["novelty"] is None  # no past-year corpus for this course, and the run says so
     assert q["citations"][0]["page_ref"] == "p1" and q["citations"][0]["char_span"] != "not_found"
     assert q["compliance"]["is_compliant"]
     ev = client.get(f"/candidates/{q['question_id']}/evidence").json()
