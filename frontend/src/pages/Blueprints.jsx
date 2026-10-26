@@ -1,18 +1,20 @@
 import { Fragment, useEffect, useState } from 'react'
 import { api } from '../api'
 
+import { Badge, Btn, Card, Empty, Explainer, Note, PageHead, Stat, Table, useToast } from '../components/ui'
+
 const BLOOM = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
 const TYPES = ['mcq', 'short_answer', 'long_answer', 'numerical']
 const DIFF = ['easy', 'medium', 'hard']
 const EMPTY = { course_outcome: '', concept: '', bloom_level: 'understand', marks: 2, question_type: 'short_answer', target_difficulty: 'easy' }
 
 const FIELD_HELP = {
-  course_outcome: 'The learning outcome this question assesses (e.g. "CO1 Explain DFD notation").',
-  concept: 'The specific topic the question must be about. Used to retrieve the right passages.',
-  bloom_level: 'Cognitive level: remember → understand → apply → analyze → evaluate → create. The question must open with a verb at this level.',
-  marks: 'Mark weighting. The answer key must be proportionate (short for 1–2 marks, long for 6–10).',
-  question_type: 'mcq (4 options), short_answer, long_answer, or numerical (numbers in question and answer).',
-  target_difficulty: 'Easy pairs with remember/understand, medium with apply/analyze, hard with evaluate/create.',
+  'Course outcome': 'The learning outcome this question assesses, e.g. "CO1 Explain DFD notation". Its content words must appear in the question or the answer.',
+  Concept: 'The specific topic the question must be about. This is also the retrieval query, so it decides which passages the model gets.',
+  'Bloom level': 'Cognitive level: remember → understand → apply → analyze → evaluate → create. The stem must open with a cue verb at this level.',
+  Marks: 'Mark weighting. The answer key has to be proportionate — short for 1–2 marks, substantial for 6–10.',
+  Type: 'mcq needs exactly four options with the key among them; numerical needs numbers in both stem and answer; short and long answer need neither.',
+  Difficulty: 'Easy pairs with remember and understand, medium with apply and analyze, hard with evaluate and create. A mismatch is flagged at validation.',
 }
 
 export default function Blueprints({ course, user, go }) {
@@ -20,93 +22,195 @@ export default function Blueprints({ course, user, go }) {
   const [selected, setSelected] = useState(null)
   const [rows, setRows] = useState([])
   const [validation, setValidation] = useState(null)
+  const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const [showHelp, setShowHelp] = useState(false)
+  const toast = useToast()
 
-  const select = (bp) => { setSelected(bp); setRows(bp.constraints.map(({ constraint_id: _id, position: _pos, ...r }) => r)); setValidation(null); setError('') }
+  const select = (bp) => {
+    setSelected(bp)
+    setRows(bp.constraints.map(({ constraint_id: _id, position: _pos, ...r }) => r))
+    setValidation(null); setError('')
+  }
   const load = () => api(`/courses/${course.course_id}/blueprints`).then((bps) => { setBlueprints(bps); return bps })
   useEffect(() => { load().then((bps) => { if (bps.length) select(bps[bps.length - 1]) }) }, [course.course_id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const run = (fn) => fn().catch((e) => setError(e.message))
-  const createDraft = () => run(async () => { const bp = await api(`/courses/${course.course_id}/blueprints`, { method: 'POST' }); await load(); select(bp) })
-  const save = () => run(async () => { const bp = await api(`/blueprints/${selected.blueprint_id}/constraints`, { method: 'PUT', body: rows }); await load(); select(bp); setValidation(await api(`/blueprints/${bp.blueprint_id}/validate`, { method: 'POST' })) })
-  const freeze = () => run(async () => { const bp = await api(`/blueprints/${selected.blueprint_id}/freeze`, { method: 'POST' }); await load(); select(bp) })
-  const setRow = (i, k, v) => setRows(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)))
 
+  const run = (name, fn) => async () => {
+    setBusy(name); setError('')
+    try { await fn() } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const createDraft = run('new', async () => {
+    const bp = await api(`/courses/${course.course_id}/blueprints`, { method: 'POST' })
+    await load(); select(bp)
+  })
+
+  const save = run('save', async () => {
+    const bp = await api(`/blueprints/${selected.blueprint_id}/constraints`, { method: 'PUT', body: rows })
+    await load(); select(bp)
+    const v = await api(`/blueprints/${bp.blueprint_id}/validate`, { method: 'POST' })
+    setValidation(v)
+    if (v.ok) toast('ok', 'Saved and valid', `${v.total_marks} marks across ${Object.keys(v.outcomes).length} outcome(s). Freeze it to lock the version.`)
+    else toast('bad', `${v.issues.length} validation issue(s)`, 'Fix them before freezing.')
+  })
+
+  const freeze = run('freeze', async () => {
+    const bp = await api(`/blueprints/${selected.blueprint_id}/freeze`, { method: 'POST' })
+    await load(); select(bp)
+    toast('ok', `Frozen as version ${bp.version}`, 'It can no longer change, and every question records which version it came from.')
+  })
+
+  const setRow = (i, k, v) => setRows(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)))
   const frozen = selected?.frozen_at != null
   const editable = user.role === 'coordinator' && selected && !frozen
+  const totalMarks = rows.reduce((n, r) => n + (Number(r.marks) || 0), 0)
 
   return (
     <>
-      <h2>Step 2 · Define the blueprint</h2>
-      <div className="intro">
-        <strong>What happens here:</strong> the blueprint is the exam specification. Each row is one question the paper needs:
-        which course outcome it assesses, which concept, at what Bloom level, for how many marks, and of what type.
-        Once frozen, a blueprint gets a version number and can no longer change — every generated question is checked
-        against its row and every published question records which version it came from.
-        <button className="link" style={{ marginLeft: 8 }} onClick={() => setShowHelp(!showHelp)}>{showHelp ? 'hide field guide' : 'what does each field mean?'}</button>
-        {showHelp && <dl className="legend" style={{ marginTop: 8 }}>{Object.entries(FIELD_HELP).map(([k, v]) => <Fragment key={k}><dt>{k.replace('_', ' ')}</dt><dd>{v}</dd></Fragment>)}</dl>}
-      </div>
+      <PageHead
+        eyebrow="Step 2 of 5"
+        title="Define the blueprint"
+        lede="The exam specification. One row per question the paper needs — and the contract every generated question is audited against."
+        actions={frozen
+          ? <Btn variant="primary" icon="arrowRight" onClick={() => go('generate')}>Next: generate</Btn>
+          : <Btn icon="arrowRight" onClick={() => go('generate')}>Skip to generate</Btn>}
+      />
 
-      <div className="card">
-        <div className="row">
-          <strong>Blueprints for this course:</strong>
-          {blueprints.map((bp) => (
-            <button key={bp.blueprint_id} className={selected?.blueprint_id === bp.blueprint_id ? 'primary' : ''} onClick={() => select(bp)}>
-              {bp.frozen_at ? `Version ${bp.version}` : 'Draft'} · {bp.constraints.length} question{bp.constraints.length === 1 ? '' : 's'}
-            </button>
-          ))}
-          {user.role === 'coordinator' && <button onClick={createDraft}>+ New draft</button>}
-          {blueprints.length === 0 && user.role !== 'coordinator' && <span className="muted">No blueprints yet — the coordinator creates them.</span>}
-        </div>
-      </div>
+      <Explainer id="blueprints">
+        <p>
+          Each row states which course outcome a question assesses, which concept it covers, at what
+          Bloom level, for how many marks and of what type. Freezing a blueprint gives it a version
+          number and locks it: generated questions are checked against their row, and every published
+          question records the version it came from.
+        </p>
+        <dl className="legend">
+          {Object.entries(FIELD_HELP).map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
+        </dl>
+      </Explainer>
+
+      <Card
+        title="Blueprints for this course"
+        hint="A draft can be edited freely. Once frozen it becomes an immutable version."
+        actions={user.role === 'coordinator' && <Btn icon="plus" busy={busy === 'new'} onClick={createDraft}>New draft</Btn>}
+      >
+        {blueprints.length === 0 ? (
+          <Empty icon="blueprint" title="No blueprint yet">
+            {user.role === 'coordinator'
+              ? 'Create a draft, add one row per question the paper needs, then freeze it as a version.'
+              : 'The course coordinator creates these.'}
+          </Empty>
+        ) : (
+          <div className="row tight">
+            {blueprints.map((bp) => (
+              <Btn
+                key={bp.blueprint_id} variant={selected?.blueprint_id === bp.blueprint_id ? 'primary' : ''}
+                icon={bp.frozen_at ? 'lock' : 'blueprint'} onClick={() => select(bp)}
+              >
+                {bp.frozen_at ? `Version ${bp.version}` : 'Draft'}
+                <span style={{ opacity: .7 }}>· {bp.constraints.length} row{bp.constraints.length === 1 ? '' : 's'}</span>
+              </Btn>
+            ))}
+          </div>
+        )}
+      </Card>
 
       {selected && (
-        <div className="card">
-          <div className="row">
-            <h3 style={{ margin: 0 }}>{frozen ? `Version ${selected.version}` : 'Draft'}</h3>
-            {frozen
-              ? <span className="pill ok">frozen {new Date(selected.frozen_at).toLocaleString()} — locked</span>
-              : <span className="pill neutral">not yet versioned — editable</span>}
-          </div>
-          <table style={{ marginTop: 10 }}>
-            <thead><tr><th>#</th><th>Course outcome</th><th>Concept</th><th>Bloom level</th><th>Marks</th><th>Type</th><th>Difficulty</th>{editable && <th />}</tr></thead>
-            <tbody>
+        <Card
+          title={frozen ? `Version ${selected.version}` : 'Draft blueprint'}
+          hint={frozen
+            ? `Frozen ${new Date(selected.frozen_at).toLocaleString()} — locked against further change.`
+            : 'Not yet versioned, so still editable. Nothing can be generated from a draft.'}
+          actions={frozen
+            ? <Badge tone="ok" dot>frozen</Badge>
+            : <Badge tone="neutral" dot>editable</Badge>}
+          foot={editable && (
+            <>
+              <Btn icon="plus" onClick={() => setRows([...rows, { ...EMPTY }])}>Add question row</Btn>
+              <Btn variant="primary" icon="check" busy={busy === 'save'} disabled={!rows.length} onClick={save}>Save &amp; validate</Btn>
+              <div className="spacer" style={{ flex: 1 }} />
+              <span className="muted">{rows.length} row{rows.length === 1 ? '' : 's'} · {totalMarks} marks</span>
+              <Btn
+                variant="ok" icon="lock" busy={busy === 'freeze'} disabled={!validation?.ok} onClick={freeze}
+                title={validation?.ok ? 'Lock this blueprint as a version' : 'Save and clear validation first'}
+              >
+                Freeze as version
+              </Btn>
+            </>
+          )}
+        >
+          {rows.length === 0 ? (
+            <Empty icon="blueprint" title="This blueprint has no rows">
+              {editable ? 'Add one row per question the paper needs.' : 'Nothing to show.'}
+            </Empty>
+          ) : (
+            <Table head={[
+              { label: '#', width: 42 }, 'Course outcome', 'Concept', 'Bloom level',
+              { label: 'Marks', width: 90 }, 'Type', 'Difficulty', ...(editable ? [{ label: '', width: 48 }] : []),
+            ]}>
               {rows.map((r, i) => (
                 <tr key={i}>
-                  <td>{i + 1}</td>
-                  <td>{editable ? <input type="text" value={r.course_outcome} placeholder="CO1 Explain …" onChange={(e) => setRow(i, 'course_outcome', e.target.value)} /> : r.course_outcome}</td>
-                  <td>{editable ? <input type="text" value={r.concept} placeholder="topic" onChange={(e) => setRow(i, 'concept', e.target.value)} /> : r.concept}</td>
-                  <td>{editable ? <select value={r.bloom_level} onChange={(e) => setRow(i, 'bloom_level', e.target.value)}>{BLOOM.map((b) => <option key={b}>{b}</option>)}</select> : r.bloom_level}</td>
-                  <td>{editable ? <input type="number" min={1} style={{ width: 60 }} value={r.marks} onChange={(e) => setRow(i, 'marks', +e.target.value)} /> : r.marks}</td>
-                  <td>{editable ? <select value={r.question_type} onChange={(e) => setRow(i, 'question_type', e.target.value)}>{TYPES.map((t) => <option key={t}>{t}</option>)}</select> : r.question_type}</td>
-                  <td>{editable ? <select value={r.target_difficulty} onChange={(e) => setRow(i, 'target_difficulty', e.target.value)}>{DIFF.map((d) => <option key={d}>{d}</option>)}</select> : r.target_difficulty}</td>
-                  {editable && <td><button onClick={() => setRows(rows.filter((_, j) => j !== i))} title="remove row">✕</button></td>}
+                  <td className="muted">{i + 1}</td>
+                  <td>{editable
+                    ? <input type="text" style={{ width: '100%' }} value={r.course_outcome} placeholder="CO1 Explain …" onChange={(e) => setRow(i, 'course_outcome', e.target.value)} />
+                    : r.course_outcome}</td>
+                  <td>{editable
+                    ? <input type="text" style={{ width: '100%' }} value={r.concept} placeholder="topic" onChange={(e) => setRow(i, 'concept', e.target.value)} />
+                    : r.concept}</td>
+                  <td>{editable
+                    ? <select value={r.bloom_level} onChange={(e) => setRow(i, 'bloom_level', e.target.value)}>{BLOOM.map((b) => <option key={b}>{b}</option>)}</select>
+                    : <span className="cap">{r.bloom_level}</span>}</td>
+                  <td>{editable
+                    ? <input type="number" min={1} style={{ width: 70 }} value={r.marks} onChange={(e) => setRow(i, 'marks', +e.target.value)} />
+                    : r.marks}</td>
+                  <td>{editable
+                    ? <select value={r.question_type} onChange={(e) => setRow(i, 'question_type', e.target.value)}>{TYPES.map((t) => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}</select>
+                    : <span className="cap">{r.question_type.replace('_', ' ')}</span>}</td>
+                  <td>{editable
+                    ? <select value={r.target_difficulty} onChange={(e) => setRow(i, 'target_difficulty', e.target.value)}>{DIFF.map((d) => <option key={d}>{d}</option>)}</select>
+                    : <span className="cap">{r.target_difficulty}</span>}</td>
+                  {editable && (
+                    <td>
+                      <Btn variant="ghost" size="sm" icon="trash" aria-label={`Remove row ${i + 1}`} onClick={() => setRows(rows.filter((_, j) => j !== i))} />
+                    </td>
+                  )}
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={8} className="muted">No rows yet{editable ? ' — add one below' : ''}.</td></tr>}
-            </tbody>
-          </table>
+            </Table>
+          )}
 
-          {editable && (
-            <div className="row" style={{ marginTop: 12 }}>
-              <button onClick={() => setRows([...rows, { ...EMPTY }])}>+ Add question row</button>
-              <button className="primary" onClick={save}>Save & validate</button>
-              <button className="ok" disabled={!validation?.ok} onClick={freeze} title={validation?.ok ? '' : 'save and fix validation issues first'}>Freeze as version</button>
-            </div>
-          )}
           {validation && (
-            <div className="section">
-              <h3>Validation</h3>
-              {validation.ok
-                ? <p><span className="pill ok">valid</span> {validation.total_marks} marks in total across {Object.keys(validation.outcomes).length} outcome(s). Freeze it to lock the version.</p>
-                : <p><span className="pill bad">{validation.issues.length} issue(s)</span> fix these before freezing:</p>}
-              {validation.issues.map((s, i) => <p key={i} className="error">• {s}</p>)}
-              <dl className="kv">{Object.entries(validation.outcomes).map(([o, m]) => <Fragment key={o}><dt>{o}</dt><dd>{m} marks</dd></Fragment>)}</dl>
-            </div>
+            <>
+              <div className="row">
+                {validation.ok
+                  ? <Badge tone="ok" dot>valid</Badge>
+                  : <Badge tone="bad" dot>{validation.issues.length} issue{validation.issues.length === 1 ? '' : 's'}</Badge>}
+                <span className="muted">
+                  {validation.total_marks} marks across {Object.keys(validation.outcomes).length} outcome(s)
+                </span>
+              </div>
+              {validation.issues.length > 0 && (
+                <Note tone="bad">
+                  <strong>Fix before freezing</strong>
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {validation.issues.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </Note>
+              )}
+              <div className="stats">
+                {Object.entries(validation.outcomes).map(([o, m]) => <Stat key={o} label={o} value={`${m}`} hint="marks" />)}
+              </div>
+            </>
           )}
-          {error && <p className="error">{error}</p>}
-          {frozen && <p style={{ marginTop: 12 }}><button className="primary" onClick={() => go('generate')}>Next: generate questions for version {selected.version} →</button></p>}
-        </div>
+
+          {error && <Note tone="bad">{error}</Note>}
+
+          {frozen && (
+            <Note tone="ok" icon="lock">
+              Version {selected.version} is locked and ready. Generation runs from this version, and
+              every question it produces is audited against the row it was written for.{' '}
+              <Btn variant="link" onClick={() => go('generate')}>Generate questions →</Btn>
+            </Note>
+          )}
+        </Card>
       )}
     </>
   )

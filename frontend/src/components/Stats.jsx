@@ -7,12 +7,17 @@ export function Interval({ i, percent = false }) {
   if (i.low == null || i.high == null) return <>{fmt(i.point)}</>
   return (
     <>
-      {fmt(i.point)} <span className="muted">[{fmt(i.low)}, {fmt(i.high)}]</span>
+      {fmt(i.point)}{' '}
+      <span className="muted" style={{ whiteSpace: 'nowrap' }}>[{fmt(i.low)}, {fmt(i.high)}]</span>
     </>
   )
 }
 
 export function Verdict({ text }) {
   const excludesZero = text?.includes('excludes zero')
-  return <span className={`pill ${excludesZero ? 'ok' : 'neutral'}`}>{text}</span>
+  return (
+    <div className={`note note-${excludesZero ? 'ok' : 'info'}`}>
+      <div><strong>{excludesZero ? 'Significant' : 'Not significant'}</strong> — {text}</div>
+    </div>
+  )
 }

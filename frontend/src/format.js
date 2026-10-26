@@ -4,6 +4,12 @@ export const pageLabel = (ref) =>
 
 export const pct = (x) => `${Math.round(x * 100)}%`
 
+export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+// Models usually letter their own options ("A. Represented as …"). The list numbers them too, so
+// the stored label is stripped for display — the option text itself is left untouched.
+export const optionText = (option) => option.replace(/^\s*\(?[A-Za-z][).\]:]\s+/, '')
+
 export const FIELD_LABEL = {
   bloom_level: 'Bloom level', question_type: 'Question type', marks: 'Marks weighting',
   concept: 'Concept', course_outcome: 'Course outcome', grounding: 'Grounded in material',

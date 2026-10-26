@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, setToken } from './api'
+import Shell from './components/Shell'
+import { ToastHost } from './components/ui'
 import Bank from './pages/Bank'
 import Blueprints from './pages/Blueprints'
 import Engines from './pages/Engines'
@@ -9,27 +11,22 @@ import Login from './pages/Login'
 import Materials from './pages/Materials'
 import Review from './pages/Review'
 
-const STEPS = [
-  { key: 'materials', n: 1, label: 'Upload sources', who: 'Coordinator' },
-  { key: 'blueprints', n: 2, label: 'Define blueprint', who: 'Coordinator' },
-  { key: 'generate', n: 3, label: 'Generate questions', who: 'Reviewer' },
-  { key: 'review', n: 4, label: 'Review candidates', who: 'Reviewer' },
-  { key: 'bank', n: 5, label: 'Question bank', who: 'Everyone' },
-]
+const PAGES = { materials: Materials, blueprints: Blueprints, generate: Generate, review: Review, bank: Bank, engines: Engines, evaluation: Evaluation }
 
 export default function App() {
   const [user, setUser] = useState(null)
   const [course, setCourse] = useState(null)
+  const [booting, setBooting] = useState(true)
   const [step, setStep] = useState('materials')
   const [runId, setRunId] = useState(null)
   const [progress, setProgress] = useState({})
 
   useEffect(() => {
     api('/auth/me').then(setUser).catch(() => setToken(''))
-    api('/courses').then((cs) => setCourse(cs[0]))
+    api('/courses').then((cs) => setCourse(cs[0])).finally(() => setBooting(false))
   }, [])
 
-  // Which steps have been completed, so the stepper can show where the course is in the journey.
+  // Which steps are complete, so the sidebar can show where the course is in the journey.
   const refreshProgress = useCallback(async () => {
     if (!course) return
     const [materials, blueprints, bank] = await Promise.all([
@@ -42,41 +39,23 @@ export default function App() {
       generate: runs.some((r) => r.status === 'completed'), review: runs.length > 0 && bank.length > 0, bank: bank.length > 0,
     })
   }, [course])
-  useEffect(() => { refreshProgress() }, [refreshProgress, step])
+  useEffect(() => { refreshProgress().catch(() => {}) }, [refreshProgress, step])
 
-  if (!user) return <Login onLogin={setUser} />
-  if (!course) return <main>Loading course…</main>
+  if (!user) return <ToastHost><Login onLogin={setUser} /></ToastHost>
+  if (booting) return <div className="boot"><span className="spinner" style={{ width: 20, height: 20 }} />Loading course…</div>
+  if (!course) return <div className="boot">No course is configured yet.</div>
 
-  const go = (key, id) => { if (id) setRunId(id); setStep(key) }
-  const pageProps = { course, user, go, runId }
+  const go = (key, id) => { if (id) setRunId(id); setStep(key); window.scrollTo({ top: 0 }) }
+  const Page = PAGES[step]
 
   return (
-    <>
-      <header className="top">
-        <h1>Assessment-Quality Platform</h1>
-        <span className="pill brand">{course.code} · {course.title}</span>
-        <button className={step === 'engines' ? 'primary' : ''} onClick={() => go('engines')}>Engines</button>
-        <button className={step === 'evaluation' ? 'primary' : ''} onClick={() => go('evaluation')}>Evaluation</button>
-        <span className="who">Signed in as <strong>{user.name}</strong> ({user.role})</span>
-        <button onClick={() => { setToken(''); setUser(null) }}>Log out</button>
-      </header>
-      <main>
-        {!['engines', 'evaluation'].includes(step) && <div className="steps">
-          {STEPS.map((s) => (
-            <button key={s.key} className={`step ${step === s.key ? 'active' : ''} ${progress[s.key] ? 'done' : ''}`} onClick={() => go(s.key)}>
-              <span className="n">{progress[s.key] ? '✓' : s.n}</span>{s.label}
-              <span className="who">{s.who}</span>
-            </button>
-          ))}
-        </div>}
-        {step === 'materials' && <Materials {...pageProps} />}
-        {step === 'blueprints' && <Blueprints {...pageProps} />}
-        {step === 'generate' && <Generate {...pageProps} />}
-        {step === 'review' && <Review {...pageProps} />}
-        {step === 'bank' && <Bank {...pageProps} />}
-        {step === 'engines' && <Engines {...pageProps} />}
-        {step === 'evaluation' && <Evaluation {...pageProps} />}
-      </main>
-    </>
+    <ToastHost>
+      <Shell
+        user={user} course={course} step={step} progress={progress} go={go}
+        onSignOut={() => { setToken(''); setUser(null) }}
+      >
+        <Page course={course} user={user} go={go} runId={runId} />
+      </Shell>
+    </ToastHost>
   )
 }
