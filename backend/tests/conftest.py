@@ -8,6 +8,12 @@ import pytest
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/aqp_test")
 
+# Settings also read backend/.env, so the suite would otherwise inherit whatever the developer has
+# configured there — pointing at a real identity provider, or with email sign-in switched off.
+# Environment variables outrank the file, so the two the suite depends on are pinned here.
+os.environ["DEV_LOGIN"] = "true"
+os.environ["OIDC_ISSUER"] = ""
+
 import psycopg  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -30,6 +36,11 @@ def client(tmp_path_factory):
     settings.ranker_model_path = models / "ranker.json"
     Base.metadata.drop_all(engine)
     with TestClient(app) as c:
+        # Every data route requires a signed-in user, so the client carries a coordinator session
+        # by default. A request that passes its own Authorization header overrides this, which is
+        # how the role-permission tests still exercise a reviewer or an unprivileged user.
+        token = c.post("/auth/login", json={"email": "coordinator@example.edu"}).json()["token"]
+        c.headers.update({"Authorization": f"Bearer {token}"})
         yield c
     Base.metadata.drop_all(engine)
 

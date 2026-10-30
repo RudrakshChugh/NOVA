@@ -20,6 +20,10 @@ class DevLoginIn(BaseModel):
     email: str
 
 
+class RoleIn(BaseModel):
+    role: str
+
+
 class TokenOut(BaseModel):
     token: str
     user: UserOut

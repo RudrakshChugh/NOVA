@@ -5,7 +5,7 @@ import json
 import httpx
 
 from ..config import settings
-from .base import GenerationRequest, GenerationResult, LLMAdapter
+from .base import GenerationRequest, GenerationResult, LLMAdapter, access_headers
 
 
 class OllamaAdapter(LLMAdapter):
@@ -27,7 +27,10 @@ class OllamaAdapter(LLMAdapter):
             "stream": False,
         }
         try:
-            r = httpx.post(f"{self.url}/api/chat", json=payload, timeout=settings.ollama_timeout)
+            r = httpx.post(
+                f"{self.url}/api/chat", json=payload,
+                headers=access_headers(), timeout=settings.ollama_timeout,
+            )
             r.raise_for_status()
         except httpx.HTTPStatusError as e:
             raise RuntimeError(f"Ollama error {e.response.status_code}: {e.response.text[:200]}") from e

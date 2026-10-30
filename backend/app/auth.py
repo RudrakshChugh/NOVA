@@ -29,10 +29,24 @@ def current_user(authorization: str = Header(default=""), db: Session = Depends(
     return user
 
 
+PENDING = "pending"
+
+
 def require_role(*roles: str):
     def dep(user: User = Depends(current_user)) -> User:
+        if user.role == PENDING:
+            # A distinct code so the interface can show "waiting for approval" rather than a flat
+            # permission error — the account is valid, it just has no role yet.
+            raise HTTPException(403, "account pending approval")
         if user.role not in roles:
             raise HTTPException(403, f"requires role {' or '.join(roles)}")
         return user
 
     return dep
+
+
+def require_active(user: User = Depends(current_user)) -> User:
+    """Any granted role. Used by the read-only endpoints that every signed-in member may see."""
+    if user.role == PENDING:
+        raise HTTPException(403, "account pending approval")
+    return user

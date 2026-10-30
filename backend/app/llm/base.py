@@ -23,6 +23,19 @@ class GenerationResult:
     seed: int | None
 
 
+def access_headers() -> dict[str, str]:
+    """Cloudflare Access service-token headers, sent on every call to a self-hosted backend that is
+    reached over a tunnel. Without them the tunnel would be an unauthenticated public endpoint."""
+    from ..config import settings
+
+    if settings.cf_access_client_id and settings.cf_access_client_secret:
+        return {
+            "CF-Access-Client-Id": settings.cf_access_client_id,
+            "CF-Access-Client-Secret": settings.cf_access_client_secret,
+        }
+    return {}
+
+
 class LLMAdapter(ABC):
     backend_id: str
 

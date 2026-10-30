@@ -5,7 +5,11 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
 
-engine = create_engine(settings.database_url)
+# `pool_pre_ping` is not optional against a serverless Postgres that scales to zero: the server
+# drops idle connections when it suspends, so a pooled connection that looked fine at checkout is
+# already dead. Pre-ping discards it and opens a new one, which also wakes the compute. `recycle`
+# keeps a connection from outliving an idle-timeout window in the first place.
+engine = create_engine(settings.database_url, pool_pre_ping=True, pool_recycle=300)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

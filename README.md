@@ -362,6 +362,96 @@ Tests run against `aqp_test` with their own model paths and a stubbed LLM, so a 
 
 ---
 
+## Deploying it (free)
+
+Everything below has a free tier that needs no card. The backend is a Dockerfile, so the same image
+runs on Render or on a Hugging Face Docker Space — note that Spaces running on compute now require
+a paid plan, so Render is the free path.
+
+| Layer | Service | Limit that matters |
+|---|---|---|
+| Frontend | Cloudflare Pages | none for a static build |
+| Backend | Render free web service | 512 MB RAM, sleeps after 15 min idle |
+| Database | Neon free Postgres | pgvector available, scale-to-zero |
+| LLM, primary | your own machine over a Cloudflare tunnel | only up when the machine is |
+| LLM, fallback | Groq free tier | per-model daily caps |
+
+### 1. Database
+
+Create a Neon project, then run `CREATE EXTENSION IF NOT EXISTS vector;` once. Take the connection
+string and change the scheme to `postgresql+psycopg://`.
+
+### 2. Google sign-in
+
+In Google Cloud Console: new project, OAuth consent screen, then **Credentials → OAuth client ID →
+Web application**. Authorized redirect URIs:
+
+```
+https://<your-backend>.onrender.com/auth/callback
+http://localhost:8000/auth/callback
+```
+
+Choose **Internal** on the consent screen if your Workspace allows it — Google then restricts
+sign-in to the organisation itself. If only **External** is available, the app stays in testing mode
+and you add reviewers as test users (up to 100). The scopes used are `openid email profile`, which
+do not require Google's app verification.
+
+### 3. Backend on Render
+
+New Web Service from the repository, runtime **Docker**, plan **free**. `render.yaml` lists every
+variable it will ask for. The ones with no safe default:
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | the Neon string |
+| `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | from step 2 |
+| `OIDC_REDIRECT_URI` | `https://<service>.onrender.com/auth/callback` |
+| `FRONTEND_URL` | the Pages URL |
+| `COORDINATOR_EMAILS` | your institute address |
+| `DEV_LOGIN` | `false` — leaving it on would hand a session to anyone who knows a seeded address |
+
+### 4. Frontend on Cloudflare Pages
+
+Root directory `frontend`, build `npm run build`, output `dist`, and one variable:
+`VITE_API_BASE=https://<service>.onrender.com`.
+
+### 5. Self-hosted model, optional
+
+Run `cloudflared` on your machine pointing at `localhost:11434`, put **Cloudflare Access** in front
+with a service token, and set `OLLAMA_URL`, `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` on
+Render. With `LLM_BACKEND=failover` the backend probes the tunnel when a run starts: reachable means
+your own model, unreachable means Groq. Leave Ollama bound to localhost — `cloudflared` reaches it
+from the same machine, and Ollama itself has no authentication.
+
+### Who can do what
+
+The site is public; sign-in is not. Three checks run server-side on the callback — the address is
+verified, the Workspace domain claim matches `ALLOWED_DOMAIN`, and the address ends in that domain.
+A `hd=` hint on the authorization URL only filters Google's account picker, so it is never trusted
+on its own.
+
+With the Google app configured as **Internal**, Google refuses non-organisation accounts before the
+callback is reached at all ("can only be used within its organisation"), so those checks are a
+second line rather than the first. They become the only line if the consent screen is ever switched
+to External — as does `ALLOWED_EMAILS`, which an Internal app makes unreachable.
+
+A first sign-in creates the account with role **pending**, which satisfies no role check anywhere:
+the person is authenticated and can see nothing. A coordinator grants **reviewer** on the People
+screen. That gate is not ceremony — review decisions are the ranker's training data and the input to
+the inter-rater agreement figure, so a decision recorded by someone outside the study changes a
+reported number.
+
+### Two things not to do
+
+**Do not run the evaluation study on free hosting.** Seven arms by three seeds is hours of
+generation; an instance that sleeps or restarts loses the run.
+
+**Do not let a study fall back.** The arms are comparable only because the model and prompt are
+pinned. Set `LLM_BACKEND` explicitly for a study and let it fail rather than switch — a run that
+started on one backend always finishes on it, but the choice across runs must not drift.
+
+---
+
 ## Methodology
 
 ### Ingestion & retrieval

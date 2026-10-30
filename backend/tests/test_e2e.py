@@ -126,3 +126,64 @@ def test_full_journey(client, stub, tmp_path):
     assert snap["citations"][0]["page_ref"] == "p1" and snap["review"]["decision"] == "edit"
     assert client.get(f"/runs/{run['run_id']}/candidates").json()[0]["state"] == "published"
     assert client.post("/candidates/publish", json={"question_ids": [q["question_id"]]}, headers=reviewer).status_code == 409
+
+
+# --- access control ---------------------------------------------------------------------------
+
+
+def test_data_routes_refuse_an_unsigned_request(client):
+    """On a deployed instance the URL is public, so every data route has to turn away a caller with
+    no session. Only the sign-in endpoints are reachable without one.
+
+    An empty Authorization header overrides the session the fixture attaches, which is the closest
+    a shared client can get to sending no header at all."""
+    anon = {"Authorization": ""}
+    for path in ("/courses", "/bank/entries", "/novelty/model", "/evaluation/arms"):
+        assert client.get(path, headers=anon).status_code == 401, path
+    assert client.post("/auth/login", json={"email": "coordinator@example.edu"}, headers=anon).status_code == 200
+
+
+def test_a_user_without_a_role_is_refused_everywhere(client):
+    """A `pending` account authenticates but may do nothing: it has no role until a coordinator
+    grants one, and review decisions from an unapproved account would land in the study data."""
+    from app.db import SessionLocal
+    from app.models import User
+
+    with SessionLocal() as db:
+        user = User(email="newcomer@example.edu", name="Newcomer", role="pending")
+        db.add(user)
+        db.commit()
+        token = __import__("app.auth", fromlist=["issue_token"]).issue_token(user)
+
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get("/courses", headers=headers).status_code == 403
+    assert client.get("/bank/entries", headers=headers).status_code == 403
+    # ...but the session itself is valid, which is what lets the app show "awaiting approval".
+    me = client.get("/auth/me", headers=headers)
+    assert me.status_code == 200 and me.json()["role"] == "pending"
+
+
+def test_the_authorization_url_carries_one_signed_state(client, monkeypatch):
+    """A second `state` parameter would make which value Google echoes back ambiguous, and the
+    callback would reject a sign-in that was perfectly valid."""
+    from urllib.parse import parse_qs, urlparse
+
+    from app.config import settings
+    from app.routers import auth as auth_router
+
+    monkeypatch.setattr(settings, "oidc_issuer", "https://accounts.google.com")
+    monkeypatch.setattr(settings, "oidc_client_id", "test-client")
+    monkeypatch.setattr(settings, "oidc_client_secret", "test-secret")
+    monkeypatch.setattr(settings, "allowed_domain", "thapar.edu")
+    monkeypatch.setattr(
+        auth_router, "_discovery",
+        lambda _issuer: {"authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth"},
+    )
+
+    r = client.get("/auth/login", follow_redirects=False)
+    assert r.status_code == 303
+    params = parse_qs(urlparse(r.headers["location"]).query)
+    assert len(params["state"]) == 1, "exactly one state parameter"
+    assert params["hd"] == ["thapar.edu"]  # restricts Google's own account picker
+    # ...and the callback must accept that state, which is what a second copy would have broken.
+    auth_router._state_serializer.loads(params["state"][0], max_age=auth_router.STATE_MAX_AGE)

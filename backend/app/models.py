@@ -21,7 +21,12 @@ class User(Base):
     user_id: Mapped[uuid.UUID] = _uuid_pk()
     email: Mapped[str] = mapped_column(Text, unique=True)
     name: Mapped[str] = mapped_column(Text)
-    role: Mapped[str] = mapped_column(Text)  # coordinator | reviewer
+    # pending | reviewer | coordinator. A user who signs in through the institutional provider but
+    # has not been granted a role lands on `pending`, which satisfies no role check anywhere: they
+    # are authenticated but cannot read material or record a decision. Review decisions are the
+    # ranker's training data and the input to the inter-rater statistic, so an unapproved account
+    # must not be able to produce any.
+    role: Mapped[str] = mapped_column(Text, default="pending")
 
 
 class Course(Base):

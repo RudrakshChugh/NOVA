@@ -6,6 +6,8 @@ what it claims to, that a blinded response cannot identify the arm, and that a d
 interval spans zero is reported as no difference — so those are asserted directly.
 """
 
+import time
+
 import pytest
 
 from app.llm.base import GenerationResult
@@ -92,6 +94,21 @@ def study(client, new_course, tmp_path_factory, request):
         headers=coordinator,
     )
     assert launched.status_code == 202, launched.text
+
+    # The launch returns as soon as the runs are queued, so the fixture waits for them. Without
+    # this the queue and the report are read while arms are still generating, and whichever arm
+    # happens to be unfinished reports no reviews — a race, not a failure.
+    status = None
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        status = client.get(f"/evaluation/blueprints/{frozen['blueprint_id']}/study",
+                            headers=coordinator).json()
+        if status["complete"]:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"study did not finish in time: {status}")
+
     return {
         "course_id": course_id, "blueprint_id": frozen["blueprint_id"],
         "coordinator": coordinator, "adapter": adapter, "launched": launched.json(),

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import SessionLocal
-from ..llm import GenerationRequest, get_adapter
+from ..llm import GenerationRequest, adapter_for, get_adapter
 from ..models import (
     Blueprint,
     BlueprintConstraint,
@@ -203,7 +203,8 @@ def _generate_for_constraint(
     what the ablation comparison is made of. What the arm controls is whether a failure sends the
     draft back and whether it keeps the candidate from reaching a reviewer.
     """
-    adapter = get_adapter()
+    # Pinned to whatever this run committed to at start, never re-probed mid-run.
+    adapter = adapter_for(run.backend_id) or get_adapter()
     passages = _passages_for(db, c, course_id, arm)
     system = SYSTEM_PROMPT if passages else UNGROUNDED_SYSTEM_PROMPT
     q = CandidateQuestion(

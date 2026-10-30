@@ -19,7 +19,11 @@ const ANALYSIS = [
   { key: 'evaluation', label: 'Evaluation', icon: 'evaluation', title: 'Evaluation study' },
 ]
 
-const ALL = [...WORKFLOW, ...ANALYSIS]
+const ADMIN = [
+  { key: 'people', label: 'People', icon: 'shield', title: 'People and roles' },
+]
+
+const ALL = [...WORKFLOW, ...ANALYSIS, ...ADMIN]
 
 function initials(name) {
   return name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()
@@ -77,6 +81,20 @@ export default function Shell({ user, course, step, progress, go, onSignOut, chi
               </button>
             ))}
           </div>
+          {user.role === 'coordinator' && (
+            <div className="nav-group">
+              <h4>Administration</h4>
+              {ADMIN.map((s) => (
+                <button
+                  key={s.key} className="nav-item" aria-current={step === s.key ? 'page' : undefined}
+                  onClick={() => visit(s.key)} title={s.title}
+                >
+                  <Icon name={s.icon} size={17} />
+                  <span className="label">{s.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </nav>
 
         <div className="sidebar-foot">
@@ -97,7 +115,7 @@ export default function Shell({ user, course, step, progress, go, onSignOut, chi
             <Icon name="menu" size={18} />
           </Btn>
           <div className="crumb">
-            <span>{inWorkflow ? 'Workflow' : 'Models & evidence'}</span>
+            <span>{inWorkflow ? 'Workflow' : ADMIN.some((a) => a.key === step) ? 'Administration' : 'Models & evidence'}</span>
             <Icon name="chevronRight" size={13} />
             <strong>{current?.title}</strong>
           </div>

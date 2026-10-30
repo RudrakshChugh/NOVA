@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/aqp"
     storage_dir: Path = Path("../storage")
     session_secret: str = "change-me"
-    cors_origins: list[str] = ["http://localhost:5173"]
+    frontend_url: str = "http://localhost:5173"  # where the callback sends the browser back to
 
     # Auth: OIDC when configured (plan §4); DEV_LOGIN allows seeded users to log in without an IdP.
     oidc_issuer: str | None = None
@@ -18,17 +18,46 @@ class Settings(BaseSettings):
     oidc_redirect_uri: str = "http://localhost:8000/auth/callback"
     dev_login: bool = True
 
+    # Institutional restriction. Google's `hd` parameter only filters its own account picker, so
+    # the domain is re-checked server-side on the claims that come back.
+    allowed_domain: str | None = None  # e.g. thapar.edu
+    allowed_emails: str = ""  # comma-separated exceptions to the domain rule
+    # Everyone else arrives as `pending` and is granted a role by a coordinator in the app.
+    coordinator_emails: str = ""
+
+    @property
+    def coordinators(self) -> set[str]:
+        return {e.strip().lower() for e in self.coordinator_emails.split(",") if e.strip()}
+
+    @property
+    def email_exceptions(self) -> set[str]:
+        return {e.strip().lower() for e in self.allowed_emails.split(",") if e.strip()}
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return list({"http://localhost:5173", self.frontend_url.rstrip("/")})
+
     # Ingestion
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"  # 384 dims, matches chunks.embedding VECTOR(384)
     chunk_window_sentences: int = 5
     chunk_stride_sentences: int = 3
 
     # Generation
-    llm_backend: str = "ollama"  # ollama | anthropic
+    llm_backend: str = "ollama"  # ollama | anthropic | groq | failover
     ollama_model: str = "qwen3:8b"
     ollama_url: str = "http://localhost:11434"
     ollama_timeout: float = 900.0  # CPU inference; one draft can take minutes
     anthropic_model: str = "claude-opus-5"
+
+    # Hosted fallback, used when the self-hosted machine is unreachable.
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_url: str = "https://api.groq.com/openai/v1"
+    groq_timeout: float = 120.0
+    # Cloudflare Access sits in front of the tunnel, so Ollama is never openly exposed.
+    cf_access_client_id: str | None = None
+    cf_access_client_secret: str | None = None
+    failover_probe_timeout: float = 2.0
     generation_temperature: float = 0.7  # plan §3.3.2; logged per run, honoured only by backends that accept it
     retrieval_top_k: int = 5
     repair_budget: int = 2

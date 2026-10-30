@@ -1,0 +1,40 @@
+# Render blueprint. Every secret is marked sync:false, so Render asks for it in the dashboard
+# instead of it living in the repository.
+services:
+  - type: web
+    name: aqp-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /docs
+    envVars:
+      - key: DATABASE_URL          # postgresql+psycopg://…neon.tech/neondb?sslmode=require
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: FRONTEND_URL          # the Cloudflare Pages URL
+        sync: false
+      - key: OIDC_ISSUER
+        value: https://accounts.google.com
+      - key: OIDC_CLIENT_ID
+        sync: false
+      - key: OIDC_CLIENT_SECRET
+        sync: false
+      - key: OIDC_REDIRECT_URI     # https://<this service>.onrender.com/auth/callback
+        sync: false
+      - key: ALLOWED_DOMAIN
+        value: thapar.edu
+      - key: COORDINATOR_EMAILS    # your institute address
+        sync: false
+      - key: DEV_LOGIN
+        value: "false"
+      - key: LLM_BACKEND
+        value: failover
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OLLAMA_URL            # the Cloudflare tunnel hostname
+        sync: false
+      - key: CF_ACCESS_CLIENT_ID
+        sync: false
+      - key: CF_ACCESS_CLIENT_SECRET
+        sync: false
