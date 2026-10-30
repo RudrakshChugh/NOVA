@@ -1,13 +1,17 @@
 # Backend image. Deploys unchanged to Render (free web service) and to a Hugging Face Docker Space,
 # which is why the port is read from the environment rather than fixed: Render injects $PORT, a
 # Space expects 7860.
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=7860 \
     HF_HOME=/tmp/hf
+
+# Absolute, because the default `../storage` resolves against the working directory and would put
+# uploads at /storage — outside the app, and not writable by a non-root Spaces user.
+ENV STORAGE_DIR=/app/storage
 
 WORKDIR /app
 

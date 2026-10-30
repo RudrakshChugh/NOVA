@@ -28,6 +28,10 @@ services:
         sync: false
       - key: DEV_LOGIN
         value: "false"
+      - key: COURSE_CODE        # the course this deployment serves
+        sync: false
+      - key: COURSE_TITLE
+        sync: false
       - key: LLM_BACKEND
         value: failover
       - key: GROQ_API_KEY

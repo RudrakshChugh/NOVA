@@ -1,0 +1,16 @@
+# The build context is the repository root. Without this the image would carry the 730 MB
+# virtualenv, node_modules, and — worse — backend/.env with live credentials in it.
+backend/.venv/
+backend/.env
+backend/data/models/
+frontend/node_modules/
+frontend/dist/
+storage/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.git/
+.github/
+docs/
+*.md
+!README.md

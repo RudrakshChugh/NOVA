@@ -16,24 +16,25 @@ SEED_USERS = [
     ("reviewer1@example.edu", "Faculty Reviewer 1", "reviewer"),
     ("reviewer2@example.edu", "Faculty Reviewer 2", "reviewer"),
 ]
-SEED_COURSE = ("CS101", "Prototype Course")
 
 
 def seed() -> None:
+    """The course is always ensured; the demo users only exist where email sign-in is enabled.
+    With an identity provider configured, accounts are created by signing in."""
     with SessionLocal() as db:
-        for email, name, role in SEED_USERS:
-            if db.scalar(select(User).where(User.email == email)) is None:
-                db.add(User(email=email, name=name, role=role))
+        if settings.dev_login:
+            for email, name, role in SEED_USERS:
+                if db.scalar(select(User).where(User.email == email)) is None:
+                    db.add(User(email=email, name=name, role=role))
         if db.scalar(select(Course)) is None:
-            db.add(Course(code=SEED_COURSE[0], title=SEED_COURSE[1]))
+            db.add(Course(code=settings.course_code, title=settings.course_title))
         db.commit()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
-    if settings.dev_login:
-        seed()  # demo users exist only where sign-in is by email
+    seed()
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     yield
 

@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     oidc_redirect_uri: str = "http://localhost:8000/auth/callback"
     dev_login: bool = True
 
+    # The single course this deployment serves (plan §2, §7 scope one course). Seeded at startup
+    # because there is no course-creation endpoint: without it a deployment with DEV_LOGIN off has
+    # no course at all and the interface has nothing to show.
+    course_code: str = "CS101"
+    course_title: str = "Prototype Course"
+
     # Institutional restriction. Google's `hd` parameter only filters its own account picker, so
     # the domain is re-checked server-side on the claims that come back.
     allowed_domain: str | None = None  # e.g. thapar.edu

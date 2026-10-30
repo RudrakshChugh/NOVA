@@ -206,8 +206,14 @@ def test_reviews_in_a_study_are_recorded_as_blinded(client, study):
 
     reviewer = login(client, "reviewer1@example.edu")
     queue = client.get(f"/evaluation/blueprints/{study['blueprint_id']}/queue", headers=reviewer).json()
-    for index, candidate in enumerate(queue):
-        body = {"decision": "accept"} if index % 2 == 0 else {"decision": "reject", "reason": "weak"}
+    for candidate in queue:
+        # The decision follows the blueprint row, not the position in the queue. Arms are paired by
+        # (constraint, seed), so deciding on the constraint gives both arms of a pair the same
+        # outcome — which is what makes "the stub answered identically, so report no difference"
+        # a real assertion. Deciding on the queue index instead made it depend on a shuffle seeded
+        # by the reviewer's randomly generated id, so the arms differed by chance from run to run.
+        accept = candidate["constraint"]["position"] % 2 == 0
+        body = {"decision": "accept"} if accept else {"decision": "reject", "reason": "weak"}
         assert client.post(f"/candidates/{candidate['question_id']}/review",
                            json=body, headers=reviewer).status_code == 200
 
@@ -226,8 +232,14 @@ def test_report_carries_intervals_and_refuses_to_overclaim(client, study):
     assert report["protocol"]["bootstrap_resamples"] == 10000
     assert report["protocol"]["pairing"] == "same constraint, same seed"
 
-    for arm in report["arms"].values():
+    for label, arm in report["arms"].items():
         rate = arm["acceptance_without_edits"]["rate"]
+        # Named rather than bare, so a failure says which arm went unreviewed and how many of its
+        # candidates ever reached the queue.
+        assert rate["point"] is not None, (
+            f"{label}: {arm['acceptance_without_edits']['reviewed']} reviewed "
+            f"of {arm['candidates']} candidates"
+        )
         assert rate["low"] <= rate["point"] <= rate["high"]
         assert arm["acceptance_by_seed"]  # variance across seeds is reported, not averaged away
 
