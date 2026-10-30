@@ -398,22 +398,43 @@ do not require Google's app verification.
 
 ### 3. Backend on Render
 
-New Web Service from the repository, runtime **Docker**, plan **free**. `render.yaml` lists every
-variable it will ask for. The ones with no safe default:
+**New → Blueprint**, pick the repository, and Render reads `render.yaml`: runtime Docker, free
+plan, and a prompt for each variable marked `sync: false`. (**New → Web Service** works too —
+choose runtime *Docker*, Dockerfile path `./Dockerfile`, plan *Free*, and set the variables by
+hand.) `SESSION_SECRET` is generated for you.
 
 | Variable | Value |
 |---|---|
-| `DATABASE_URL` | the Neon string |
+| `DATABASE_URL` | the Neon string, scheme changed to `postgresql+psycopg://` |
 | `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | from step 2 |
 | `OIDC_REDIRECT_URI` | `https://<service>.onrender.com/auth/callback` |
-| `FRONTEND_URL` | the Pages URL |
-| `COORDINATOR_EMAILS` | your institute address |
-| `DEV_LOGIN` | `false` — leaving it on would hand a session to anyone who knows a seeded address |
+| `COORDINATOR_EMAILS` | your institute address — this is how you become coordinator |
+| `COURSE_CODE` / `COURSE_TITLE` | the course this instance serves |
+| `FRONTEND_URL` | the Pages URL — not known yet, see below |
+| `DEV_LOGIN` | `false`; leaving it on would hand a session to anyone who knows a seeded address |
+
+The first build takes several minutes: it installs the dependencies and bakes the embedding model
+into the image.
+
+Two values can only be filled in after the other service exists, so this is a two-pass step:
+
+1. Deploy Render with `FRONTEND_URL` set to anything (the service URL itself will do).
+2. Take the service URL, add `https://<service>.onrender.com/auth/callback` to the Google client's
+   authorized redirect URIs, and set `OIDC_REDIRECT_URI` to the same string. **Exact match** — a
+   mismatch is rejected by Google before the account picker appears.
+3. Deploy Pages (step 4), then come back and set `FRONTEND_URL` to the Pages URL. Render redeploys
+   on save.
 
 ### 4. Frontend on Cloudflare Pages
 
 Root directory `frontend`, build `npm run build`, output `dist`, and one variable:
 `VITE_API_BASE=https://<service>.onrender.com`.
+
+### First sign-in
+
+Open the Pages URL, sign in with the address in `COORDINATOR_EMAILS`, and you land as coordinator.
+Everyone else who signs in appears on the **People** screen as `pending` until you grant them a
+role.
 
 ### 5. Self-hosted model, optional
 
