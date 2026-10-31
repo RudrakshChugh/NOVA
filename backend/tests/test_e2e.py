@@ -300,3 +300,33 @@ def test_groq_does_not_retry_a_bad_api_key(monkeypatch):
                                            json_schema={"required": ["stem"]})
         )
     assert len(calls) == 1
+
+
+def test_a_draft_blueprint_can_be_discarded_but_a_frozen_one_cannot(client, new_course):
+    """An unused draft is clutter and should be removable. A frozen version never is: runs and
+    published questions record the version they came from, so deleting one orphans provenance."""
+    coordinator = login(client, "coordinator@example.edu")
+    course_id = new_course("DISCARD", "Discard Test")
+
+    draft = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    assert client.delete(f"/blueprints/{draft['blueprint_id']}", headers=coordinator).status_code == 204
+    assert client.get(f"/blueprints/{draft['blueprint_id']}", headers=coordinator).status_code == 404
+
+    keep = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    rows = [{"course_outcome": "CO1 Explain DFD notation", "concept": "data store",
+             "bloom_level": "understand", "marks": 2, "question_type": "short_answer",
+             "target_difficulty": "easy"}]
+    client.put(f"/blueprints/{keep['blueprint_id']}/constraints", json=rows, headers=coordinator)
+    frozen = client.post(f"/blueprints/{keep['blueprint_id']}/freeze", headers=coordinator)
+    assert frozen.status_code == 200, frozen.text
+
+    refused = client.delete(f"/blueprints/{keep['blueprint_id']}", headers=coordinator)
+    assert refused.status_code == 409 and "frozen" in refused.json()["detail"]
+
+
+def test_a_reviewer_cannot_discard_a_blueprint(client, new_course):
+    coordinator = login(client, "coordinator@example.edu")
+    reviewer = login(client, "reviewer1@example.edu")
+    course_id = new_course("DISCARD2", "Discard Roles")
+    draft = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    assert client.delete(f"/blueprints/{draft['blueprint_id']}", headers=reviewer).status_code == 403

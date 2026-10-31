@@ -39,6 +39,15 @@ export default function Blueprints({ course, user, go }) {
     try { await fn() } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  const discard = () => run('discard', async () => {
+    await api(`/blueprints/${selected.blueprint_id}`, { method: 'DELETE' })
+    const left = await load()
+    const drafts = left.filter((b) => !b.frozen_at)
+    if (left.length) select(drafts[drafts.length - 1] || left[left.length - 1])
+    else { setSelected(null); setRows([]) }
+    toast('info', 'Draft discarded', 'Only drafts can be removed; a frozen version is permanent.')
+  })()
+
   const createDraft = run('new', async () => {
     const bp = await api(`/courses/${course.course_id}/blueprints`, { method: 'POST' })
     await load(); select(bp)
@@ -106,7 +115,10 @@ export default function Blueprints({ course, user, go }) {
                 icon={bp.frozen_at ? 'lock' : 'blueprint'} onClick={() => select(bp)}
               >
                 {bp.frozen_at ? `Version ${bp.version}` : 'Draft'}
-                <span style={{ opacity: .7 }}>· {bp.constraints.length} row{bp.constraints.length === 1 ? '' : 's'}</span>
+                <span style={{ opacity: .7 }}>
+                  · {bp.constraints.length} row{bp.constraints.length === 1 ? '' : 's'}
+                  {!bp.frozen_at && bp.created_at && ` · started ${new Date(bp.created_at).toLocaleDateString()}`}
+                </span>
               </Btn>
             ))}
           </div>
@@ -125,12 +137,22 @@ export default function Blueprints({ course, user, go }) {
           foot={editable && (
             <>
               <Btn icon="plus" onClick={() => setRows([...rows, { ...EMPTY }])}>Add question row</Btn>
-              <Btn variant="primary" icon="check" busy={busy === 'save'} disabled={!rows.length} onClick={save}>Save &amp; validate</Btn>
+              <Btn
+                variant="primary" icon="check" busy={busy === 'save'} disabled={!rows.length}
+                title={rows.length ? 'Check the rows, then freeze' : 'Add at least one question row first'}
+                onClick={save}
+              >
+                Save &amp; validate
+              </Btn>
               <div className="spacer" style={{ flex: 1 }} />
               <span className="muted">{rows.length} row{rows.length === 1 ? '' : 's'} · {totalMarks} marks</span>
               <Btn
                 variant="ok" icon="lock" busy={busy === 'freeze'} disabled={!validation?.ok} onClick={freeze}
-                title={validation?.ok ? 'Lock this blueprint as a version' : 'Save and clear validation first'}
+                title={validation?.ok
+                  ? 'Lock this blueprint as a version'
+                  : rows.length
+                    ? 'Save & validate first, and clear any issues it reports'
+                    : 'Add question rows, then save and validate'}
               >
                 Freeze as version
               </Btn>
@@ -138,8 +160,22 @@ export default function Blueprints({ course, user, go }) {
           )}
         >
           {rows.length === 0 ? (
-            <Empty icon="blueprint" title="This blueprint has no rows">
-              {editable ? 'Add one row per question the paper needs.' : 'Nothing to show.'}
+            <Empty
+              icon="blueprint" title="This blueprint has no rows"
+              action={editable && (
+                <>
+                  <Btn variant="primary" icon="plus" onClick={() => setRows([{ ...EMPTY }])}>
+                    Add the first row
+                  </Btn>
+                  {rows.length === 0 && (
+                    <Btn icon="trash" onClick={discard}>Discard this draft</Btn>
+                  )}
+                </>
+              )}
+            >
+              {editable
+                ? 'One row per question the paper needs: which outcome it assesses, which concept, at what Bloom level, for how many marks.'
+                : 'Nothing to show.'}
             </Empty>
           ) : (
             <Table head={[

@@ -62,6 +62,7 @@ class Blueprint(Base):
     blueprint_id: Mapped[uuid.UUID] = _uuid_pk()
     course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.course_id"))
     version: Mapped[int | None] = mapped_column(Integer, nullable=True)  # assigned at freeze
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     frozen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     constraints: Mapped[list["BlueprintConstraint"]] = relationship(
         back_populates="blueprint", cascade="all, delete-orphan", order_by="BlueprintConstraint.position"

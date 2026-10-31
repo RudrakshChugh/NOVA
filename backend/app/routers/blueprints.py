@@ -74,6 +74,21 @@ def put_constraints(blueprint_id: UUID, rows: list[ConstraintIn], db: Session = 
     return bp
 
 
+@router.delete("/blueprints/{blueprint_id}", status_code=204,
+               dependencies=[Depends(require_role("coordinator"))])
+def delete_blueprint(blueprint_id: UUID, db: Session = Depends(get_db)):
+    """Discard a draft. A frozen blueprint is never removable: published questions record the
+    version they were written for, and runs are tied to it, so deleting one would orphan the
+    provenance the bank depends on."""
+    bp = db.get(Blueprint, blueprint_id)
+    if bp is None:
+        raise HTTPException(404, "blueprint not found")
+    if bp.frozen_at is not None:
+        raise HTTPException(409, "a frozen blueprint cannot be deleted")
+    db.delete(bp)
+    db.commit()
+
+
 @router.post("/blueprints/{blueprint_id}/validate", response_model=ValidationOut)
 def validate_blueprint(blueprint_id: UUID, db: Session = Depends(get_db)):
     return _validate(_get(db, blueprint_id))

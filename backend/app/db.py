@@ -24,6 +24,7 @@ class Base(DeclarativeBase):
 SCHEMA_PATCHES = (
     "ALTER TABLE generation_runs ADD COLUMN IF NOT EXISTS arm_label TEXT",
     "ALTER TABLE pyq_papers ADD COLUMN IF NOT EXISTS detected_year INTEGER",
+    "ALTER TABLE blueprints ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()",
 )
 
 

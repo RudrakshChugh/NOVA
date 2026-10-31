@@ -68,6 +68,7 @@ class BlueprintOut(BaseModel):
     blueprint_id: UUID
     course_id: UUID
     version: int | None
+    created_at: datetime | None = None
     frozen_at: datetime | None
     constraints: list[ConstraintOut]
 
