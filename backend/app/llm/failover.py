@@ -25,7 +25,11 @@ def self_hosted_reachable() -> bool:
     try:
         r = httpx.get(f"{url}/api/tags", headers=access_headers(), timeout=settings.failover_probe_timeout)
         return r.status_code == 200
-    except httpx.HTTPError:
+    except Exception:
+        # Deliberately broad. Anything at all going wrong here means "the self-hosted machine is not
+        # usable", which is a fallback, not a failure — and a misconfigured URL must not take a
+        # generation run down with it. `httpx.InvalidURL` is not an `HTTPError`, so catching that
+        # alone left exactly this hole.
         return False
 
 

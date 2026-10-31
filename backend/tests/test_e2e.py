@@ -187,3 +187,14 @@ def test_the_authorization_url_carries_one_signed_state(client, monkeypatch):
     assert params["hd"] == ["thapar.edu"]  # restricts Google's own account picker
     # ...and the callback must accept that state, which is what a second copy would have broken.
     auth_router._state_serializer.loads(params["state"][0], max_age=auth_router.STATE_MAX_AGE)
+
+
+def test_the_failover_probe_never_raises(monkeypatch):
+    """A deployment leaves OLLAMA_URL unset until a tunnel exists, and a typo in it is likelier
+    still. Either way the probe means 'not reachable', and must not fail a generation run."""
+    from app.config import settings
+    from app.llm.failover import self_hosted_reachable
+
+    for url in ("", "   ", "not a url", "http://[::bad", "ftp://nowhere", "http://127.0.0.1:1"):
+        monkeypatch.setattr(settings, "ollama_url", url)
+        assert self_hosted_reachable() is False, url
