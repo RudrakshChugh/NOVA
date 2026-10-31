@@ -73,6 +73,12 @@ export default function Blueprints({ course, user, go }) {
   const frozen = selected?.frozen_at != null
   const editable = user.role === 'coordinator' && selected && !frozen
   const totalMarks = rows.reduce((n, r) => n + (Number(r.marks) || 0), 0)
+  // A chip shows what is on screen for the blueprint being edited, and what is stored for the
+  // rest, so the count beside a draft never contradicts the table under it.
+  const isSelected = (bp) => bp.blueprint_id === selected?.blueprint_id
+  const countFor = (bp) => (isSelected(bp) ? rows.length : bp.constraints.length)
+  const isDirty = (bp) => isSelected(bp) && !frozen
+    && JSON.stringify(rows) !== JSON.stringify(bp.constraints.map(({ constraint_id: _i, position: _p, ...r }) => r))
 
   return (
     <>
@@ -117,7 +123,8 @@ export default function Blueprints({ course, user, go }) {
               >
                 {bp.frozen_at ? `Version ${bp.version}` : 'Draft'}
                 <span style={{ opacity: .7 }}>
-                  · {bp.constraints.length} row{bp.constraints.length === 1 ? '' : 's'}
+                  · {countFor(bp)} row{countFor(bp) === 1 ? '' : 's'}
+                  {isDirty(bp) && ' · unsaved'}
                   {!bp.frozen_at && bp.created_at && ` · started ${new Date(bp.created_at).toLocaleDateString()}`}
                 </span>
               </Btn>
