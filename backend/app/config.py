@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -79,6 +80,20 @@ class Settings(BaseSettings):
     source_grounded_max_chunks: int = 80  # cap for the whole-material baseline's prompt
 
     ranker_model_path: Path = Path(__file__).resolve().parents[1] / "data" / "models" / "ranker.json"
+
+
+    @field_validator("database_url")
+    @classmethod
+    def _use_psycopg3(cls, url: str) -> str:
+        """Hosted Postgres providers all hand out `postgresql://` (or the older `postgres://`), and
+        SQLAlchemy maps both to psycopg2 — a driver this project deliberately does not install.
+        Left alone it fails at import time with ModuleNotFoundError, which names psycopg2 and so
+        points away from the actual mistake. Normalising here means a connection string can be
+        pasted exactly as the provider gives it."""
+        for prefix in ("postgresql://", "postgres://"):
+            if url.startswith(prefix):
+                return "postgresql+psycopg://" + url[len(prefix):]
+        return url
 
 
 settings = Settings()

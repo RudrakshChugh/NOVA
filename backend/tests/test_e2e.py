@@ -198,3 +198,19 @@ def test_the_failover_probe_never_raises(monkeypatch):
     for url in ("", "   ", "not a url", "http://[::bad", "ftp://nowhere", "http://127.0.0.1:1"):
         monkeypatch.setattr(settings, "ollama_url", url)
         assert self_hosted_reachable() is False, url
+
+
+def test_a_provider_connection_string_is_normalised_to_psycopg3():
+    """Hosted providers hand out `postgresql://`, which SQLAlchemy resolves to psycopg2 — a driver
+    this project does not install. Pasting the string as given must still work."""
+    from app.config import Settings
+
+    given = "postgresql://user:pw@ep-x.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+    assert Settings(database_url=given).database_url == (
+        "postgresql+psycopg://user:pw@ep-x.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+    )
+    # the older scheme some providers still emit
+    assert Settings(database_url="postgres://u:p@h/db").database_url == "postgresql+psycopg://u:p@h/db"
+    # an explicit driver is left exactly as written
+    explicit = "postgresql+psycopg://u:p@h/db"
+    assert Settings(database_url=explicit).database_url == explicit
