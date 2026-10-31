@@ -23,13 +23,14 @@ export default function Blueprints({ course, user, go }) {
   const [rows, setRows] = useState([])
   const [validation, setValidation] = useState(null)
   const [busy, setBusy] = useState('')
+  const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState('')
   const toast = useToast()
 
   const select = (bp) => {
     setSelected(bp)
     setRows(bp.constraints.map(({ constraint_id: _id, position: _pos, ...r }) => r))
-    setValidation(null); setError('')
+    setValidation(null); setError(''); setConfirming(false)
   }
   const load = () => api(`/courses/${course.course_id}/blueprints`).then((bps) => { setBlueprints(bps); return bps })
   useEffect(() => { load().then((bps) => { if (bps.length) select(bps[bps.length - 1]) }) }, [course.course_id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -145,7 +146,16 @@ export default function Blueprints({ course, user, go }) {
                 Save &amp; validate
               </Btn>
               <div className="spacer" style={{ flex: 1 }} />
-              <span className="muted">{rows.length} row{rows.length === 1 ? '' : 's'} · {totalMarks} marks</span>
+              {confirming
+                ? <>
+                  <span className="muted">Discard this draft and its {rows.length} row{rows.length === 1 ? '' : 's'}?</span>
+                  <Btn variant="bad" size="sm" busy={busy === 'discard'} onClick={discard}>Yes, discard</Btn>
+                  <Btn variant="ghost" size="sm" onClick={() => setConfirming(false)}>Cancel</Btn>
+                </>
+                : <>
+                  <span className="muted">{rows.length} row{rows.length === 1 ? '' : 's'} · {totalMarks} marks</span>
+                  <Btn variant="ghost" size="sm" icon="trash" onClick={() => setConfirming(true)}>Discard draft</Btn>
+                </>}
               <Btn
                 variant="ok" icon="lock" busy={busy === 'freeze'} disabled={!validation?.ok} onClick={freeze}
                 title={validation?.ok
@@ -163,14 +173,9 @@ export default function Blueprints({ course, user, go }) {
             <Empty
               icon="blueprint" title="This blueprint has no rows"
               action={editable && (
-                <>
-                  <Btn variant="primary" icon="plus" onClick={() => setRows([{ ...EMPTY }])}>
-                    Add the first row
-                  </Btn>
-                  {rows.length === 0 && (
-                    <Btn icon="trash" onClick={discard}>Discard this draft</Btn>
-                  )}
-                </>
+                <Btn variant="primary" icon="plus" onClick={() => setRows([{ ...EMPTY }])}>
+                  Add the first row
+                </Btn>
               )}
             >
               {editable
