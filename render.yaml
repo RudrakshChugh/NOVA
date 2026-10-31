@@ -36,6 +36,8 @@ services:
         value: failover
       - key: GROQ_API_KEY
         sync: false
+      - key: GROQ_MODEL         # overridable when Groq retires the default
+        value: openai/gpt-oss-120b
       - key: OLLAMA_URL            # the Cloudflare tunnel hostname
         sync: false
       - key: CF_ACCESS_CLIENT_ID

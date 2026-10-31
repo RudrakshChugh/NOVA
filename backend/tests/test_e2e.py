@@ -352,3 +352,62 @@ def test_a_coordinator_runs_the_workflow_but_is_barred_from_the_blinded_queue(cl
 
     refused = client.get(f"/evaluation/blueprints/{frozen['blueprint_id']}/queue", headers=coordinator)
     assert refused.status_code == 403, "the blinded queue must stay reviewer-only"
+
+
+def test_a_rejected_model_name_reports_what_the_key_can_use(monkeypatch):
+    """Providers retire models on their own schedule, so a configured name goes stale without
+    anything here changing. "does not exist or you do not have access to it" is true and useless;
+    the list of usable names is the one thing that fixes it, and the key can ask for it."""
+    import httpx
+
+    from app.config import settings
+    from app.llm import groq_adapter
+
+    monkeypatch.setattr(settings, "groq_api_key", "test-key")
+    monkeypatch.setattr(settings, "groq_model", "llama-3.3-70b-versatile")
+
+    def fake_post(*_a, **_k):
+        return httpx.Response(
+            404, json={"error": {"message": "The model does not exist", "code": "model_not_found"}},
+            request=httpx.Request("POST", "https://api.groq.com/x"),
+        )
+
+    def fake_get(*_a, **_k):
+        return httpx.Response(
+            200, json={"data": [{"id": "openai/gpt-oss-120b"}, {"id": "openai/gpt-oss-20b"}]},
+            request=httpx.Request("GET", "https://api.groq.com/models"),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    with pytest.raises(RuntimeError) as err:
+        groq_adapter.GroqAdapter().generate(
+            groq_adapter.GenerationRequest(system="s", user="u", temperature=0.7, seed=None,
+                                           json_schema={"required": ["stem"]})
+        )
+    assert "openai/gpt-oss-120b" in str(err.value)
+    assert "GROQ_MODEL" in str(err.value)
+
+
+def test_an_unrelated_error_is_not_decorated_with_a_model_list(monkeypatch):
+    """Only a model error earns the lookup; a 401 should not spend a round trip discovering that
+    the key it just rejected cannot list anything either."""
+    import httpx
+
+    from app.config import settings
+    from app.llm import groq_adapter
+
+    monkeypatch.setattr(settings, "groq_api_key", "wrong")
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(
+        401, json={"error": "invalid api key"}, request=httpx.Request("POST", "https://x/y")))
+
+    def must_not_be_called(*_a, **_k):
+        raise AssertionError("no model lookup for a non-model error")
+
+    monkeypatch.setattr(httpx, "get", must_not_be_called)
+    with pytest.raises(RuntimeError, match="Groq error 401"):
+        groq_adapter.GroqAdapter().generate(
+            groq_adapter.GenerationRequest(system="s", user="u", temperature=0.7, seed=None,
+                                           json_schema={"required": ["stem"]})
+        )

@@ -39,6 +39,28 @@ class GroqAdapter(LLMAdapter):
         self.backend_id = f"groq:{self.model}"
         self.url = settings.groq_url.rstrip("/")
 
+    def _hint(self, response: httpx.Response) -> str:
+        """For a rejected model name, say which names the key can actually reach.
+
+        Providers retire models on their own schedule, so a configured name goes stale without
+        anything in this project changing. "does not exist or you do not have access to it" is
+        true but unhelpful on its own: the one thing needed to fix it is the list of what is
+        available, and the key that just failed can ask for exactly that.
+        """
+        if response.status_code not in (400, 404) or "model" not in response.text.lower():
+            return ""
+        try:
+            listing = httpx.get(
+                f"{self.url}/models",
+                headers={"Authorization": f"Bearer {settings.groq_api_key}"}, timeout=10,
+            )
+            names = sorted(m["id"] for m in listing.json().get("data", []))
+        except Exception:
+            return ""
+        if not names:
+            return ""
+        return f" — models this key can use: {', '.join(names)}. Set GROQ_MODEL to one of them."
+
     def _post(self, payload: dict) -> httpx.Response:
         """One call, retried through rate limits and transient server errors."""
         backoff = 1.0
@@ -54,7 +76,7 @@ class GroqAdapter(LLMAdapter):
 
             if r.status_code not in RETRYABLE:
                 if r.is_error:
-                    raise RuntimeError(f"Groq error {r.status_code}: {r.text[:200]}")
+                    raise RuntimeError(f"Groq error {r.status_code}: {r.text[:200]}{self._hint(r)}")
                 return r
 
             if attempt == settings.groq_max_retries:

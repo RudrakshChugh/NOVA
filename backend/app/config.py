@@ -58,7 +58,9 @@ class Settings(BaseSettings):
 
     # Hosted fallback, used when the self-hosted machine is unreachable.
     groq_api_key: str | None = None
-    groq_model: str = "llama-3.3-70b-versatile"
+    # Groq retires models on a schedule, so this will go stale again. A model error reports
+    # what the key can actually reach, and this is overridable without a code change.
+    groq_model: str = "openai/gpt-oss-120b"
     groq_url: str = "https://api.groq.com/openai/v1"
     groq_timeout: float = 120.0
     groq_max_retries: int = 4  # a free tier's per-minute limit is met by any run of size
