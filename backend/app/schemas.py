@@ -209,6 +209,7 @@ class PYQOut(BaseModel):
 class PYQPaperOut(BaseModel):
     paper_id: UUID
     year: int
+    detected_year: int | None = None
     label: str
     filename: str | None
     source_type: str

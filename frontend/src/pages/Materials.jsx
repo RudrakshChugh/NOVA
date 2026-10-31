@@ -123,7 +123,7 @@ const PASTE_HINT = `One question per block, separated by a blank line.
 function PastPapers({ course, canUpload }) {
   const [papers, setPapers] = useState([])
   const [questions, setQuestions] = useState({})
-  const [form, setForm] = useState({ year: new Date().getFullYear() - 1, label: '', text: '' })
+  const [form, setForm] = useState({ year: '', label: '', text: '' })
   const [file, setFile] = useState(null)
   const [mode, setMode] = useState('file')
   const [busy, setBusy] = useState(false)
@@ -174,6 +174,7 @@ function PastPapers({ course, canUpload }) {
     } catch (err) { setError(err.message) }
   }
 
+  const validYear = /^\d{4}$/.test(String(form.year))
   const corpus = papers.reduce((n, p) => n + p.question_count, 0)
   const years = new Set(papers.map((p) => p.year))
 
@@ -199,8 +200,11 @@ function PastPapers({ course, canUpload }) {
       {canUpload && (
         <form onSubmit={submit} className="stack">
           <div className="row top">
-            <Field label="Year">
-              <input type="number" value={form.year} onChange={(e) => setForm({ ...form, year: e.target.value })} />
+            <Field label="Year" hint="as printed on the paper">
+              <input
+                type="number" required placeholder="2024" value={form.year}
+                onChange={(e) => setForm({ ...form, year: e.target.value })}
+              />
             </Field>
             <Field grow label="Label">
               <input type="text" placeholder="End Semester 2024" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
@@ -220,7 +224,7 @@ function PastPapers({ course, canUpload }) {
             <textarea rows={6} placeholder={PASTE_HINT} value={form.text} onChange={(e) => setForm({ ...form, text: e.target.value })} />
           )}
           <div className="row">
-            <Btn variant="primary" icon="plus" busy={busy} disabled={mode === 'file' ? !file : !form.text.trim()}>
+            <Btn variant="primary" icon="plus" busy={busy} disabled={!validYear || (mode === 'file' ? !file : !form.text.trim())}>
               {busy ? 'Extracting questions…' : 'Add paper'}
             </Btn>
           </div>
@@ -245,7 +249,14 @@ function PastPapers({ course, canUpload }) {
                     <Badge tone="outline">{p.source_type}</Badge>
                   </div>
                 </td>
-                <td className="num">{p.year}</td>
+                <td className="num">
+                  {p.year}
+                  {p.detected_year != null && p.detected_year !== p.year && (
+                    <div style={{ marginTop: 4 }}>
+                      <Badge tone="warn" dot>paper says {p.detected_year}</Badge>
+                    </div>
+                  )}
+                </td>
                 <td className="num">{p.question_count}</td>
                 <td>
                   <div className="row tight">

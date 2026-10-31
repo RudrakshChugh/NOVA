@@ -193,6 +193,9 @@ class PYQPaper(Base):
     label: Mapped[str] = mapped_column(Text)  # e.g. "End Semester 2024"
     filename: Mapped[str | None] = mapped_column(Text, nullable=True)  # null when pasted as text
     source_type: Mapped[str] = mapped_column(Text)  # pdf | docx | text
+    # The year printed on the paper itself, when it states one. Advisory: it is shown next to
+    # the year that was entered so a disagreement is visible rather than silent.
+    detected_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stored_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     questions: Mapped[list["PYQ"]] = relationship(back_populates="paper", cascade="all, delete-orphan")

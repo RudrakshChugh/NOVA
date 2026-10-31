@@ -364,3 +364,16 @@ def test_a_paper_without_the_grid_still_uses_general_numbering():
     assert pyq_ingestion.split_grid_questions(plain) is None
     questions = pyq_ingestion.split_questions(plain)
     assert [q.marks for q in questions] == [2, 5]
+
+
+def test_the_year_printed_on_a_paper_is_detected():
+    """The year is the fact an uploader is most likely to get wrong, and a corpus that looks like
+    one year undercuts the point of comparing across years. Detection is advisory: it is reported
+    so a disagreement is visible, never used to overrule what was entered."""
+    from app.services.pyq_ingestion import detect_year
+
+    assert detect_year("Mid Semester Examination\nMST- Sept 26, 2024\nCourse Code: UCS503") == 2024
+    assert detect_year("Course Code: UCS503\nDate: 27/9/2025 (3P.M- 5RM)") == 2025
+    assert detect_year("Course Code: UCS503\nMaximum Marks: 30") is None
+    # a course code is not a year, and neither is a mark total
+    assert detect_year("UCS503 Maximum Marks: 1030") is None

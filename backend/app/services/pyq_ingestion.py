@@ -88,6 +88,20 @@ class ExtractedQuestion:
     bloom_level: str | None
 
 
+# Papers print their own date in the first few lines ("MST- Sept 26, 2024", "Date: 27/9/2025").
+# The year a paper belongs to is the one fact the uploader is most likely to get wrong, and a
+# corpus that looks like one year undercuts the whole point of comparing across years.
+_YEAR = re.compile(r"(?<![0-9])(19[89][0-9]|20[0-9]{2})(?![0-9])")
+
+
+def detect_year(text: str, head_lines: int = 30) -> int | None:
+    """The year printed on the paper, if it states one. Advisory only: it is reported back so a
+    mistyped year can be seen, never used to overrule what the coordinator entered."""
+    head = chr(10).join(text.splitlines()[:head_lines])
+    found = [int(m.group(1)) for m in _YEAR.finditer(head)]
+    return found[0] if found else None
+
+
 def read_text(path: Path, source_type: str) -> str:
     """Document text with slide/PDF line wrapping repaired, as in course-material ingestion."""
     if source_type == "pdf":

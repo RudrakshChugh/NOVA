@@ -54,6 +54,7 @@ def upload_paper(course_id: UUID, file: UploadFile, year: int = Form(...), label
     db.add(paper)
     db.commit()
     text = pyq_ingestion.read_text(dest, paper.source_type)
+    paper.detected_year = pyq_ingestion.detect_year(text)
     if pyq_ingestion.ingest_paper(db, paper, text) == 0:
         db.delete(paper)
         db.commit()
@@ -68,12 +69,17 @@ def paste_paper(course_id: UUID, body: PYQPasteIn, db: Session = Depends(get_db)
     """For papers whose layout defeats the splitter: one question per blank-line-separated block."""
     _require_course(db, course_id)
     paper = PYQPaper(course_id=course_id, year=body.year, label=body.label, source_type="text")
+    paper.detected_year = pyq_ingestion.detect_year(body.text)
     db.add(paper)
     db.commit()
     if pyq_ingestion.ingest_paper(db, paper, body.text) == 0:
         db.delete(paper)
         db.commit()
-        raise HTTPException(422, "no questions found in the pasted text")
+        raise HTTPException(
+            422,
+            "No questions were recognised in that text. Separate each question with a blank line "
+            "and start it with its number, e.g. 'Q1. ...' or '1. ...'.",
+        )
     db.refresh(paper)
     return _paper_out(db, paper)
 
