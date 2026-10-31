@@ -265,3 +265,102 @@ def test_exact_binomial_is_symmetric():
     )
     assert metrics._exact_binomial_two_sided(0, 0) == 1.0
     assert not math.isnan(metrics._exact_binomial_two_sided(5, 10))
+
+
+# --- institutional grid papers ------------------------------------------------------------------
+# Built from the real layout of a Thapar MST paper: a Q No. / Questions / Marks / CO / BL table,
+# flattened by PDF extraction so the cells land on their own lines, interleaved with the question
+# text. The OCR damage is reproduced deliberately — "C05" for CO5 and "L I" for L1 are what the
+# column actually produces, and a splitter that only handles clean text is no use on a real paper.
+
+GRID_PAPER = """Roll Number:
+Thapar Institute of Engineering and Technology, Patiala
+Mid Semester Examination (MST)
+Course Code: UCS503
+Maximum Marks: 30
+Note:
+L Attempt All Questions
+2. Assume suitable missing data (f any)
+Q No. Questions Marks CO BL
+Q1 You are part of a team building a social media application. The feature
+should allow users to: 1. Create surveys in group chats; 2. Set a closing
+date for the poll; 3. View outcomes in real time as members vote.
+a) Which software process model would be most suitable?
+b) Arrange these models in order of suitability.
+05 CO1
+C05
+L2
+Q2 Refer the case in Q1 and answer the following
+a) Write four user stories in a suitable template.
+02
+b) Design a User Story Card for one of these user stories.
+03
+C05 L4
+Q3 Consider the following Case: EduCare University plans to launch a Smart
+05 CO2 L I
+Learning Management System to support its online programmes.
+a. Identify at least five functional requirements.
+b. Identify at least five non-functional requirements
+"""
+
+
+def _grid(text=GRID_PAPER):
+    from app.services import pyq_ingestion
+
+    return pyq_ingestion.split_questions(text)
+
+
+def test_grid_paper_splits_on_questions_not_on_the_lists_inside_them():
+    questions = _grid()
+    assert [q.number for q in questions] == ["1", "2", "3"]
+    # "1. Create surveys; 2. Set a closing date" is a list inside Q1, not three questions
+    assert "Create surveys in group chats" in questions[0].text
+    assert "View outcomes in real time" in questions[0].text
+
+
+def test_grid_paper_keeps_sub_parts_with_the_question_that_introduces_them():
+    first, second, third = _grid()
+    assert "Which software process model" in first.text and "order of suitability" in first.text
+    assert "four user stories" in second.text and "User Story Card" in second.text
+    assert "functional requirements" in third.text
+
+
+def test_grid_paper_reads_marks_out_of_the_column_and_sums_sub_parts():
+    first, second, third = _grid()
+    assert first.marks == 5
+    assert second.marks == 5, "02 and 03 are the two sub-parts of one 5-mark question"
+    assert third.marks == 5
+    assert sum(q.marks for q in _grid()) == 15  # the three questions this sample carries
+
+
+def test_grid_paper_takes_bloom_from_the_level_the_paper_assigns():
+    first, second, third = _grid()
+    assert first.bloom_level == "understand"      # L2
+    assert second.bloom_level == "analyze"        # L4
+    assert third.bloom_level == "remember"        # "L I", which is OCR for L1
+
+
+def test_grid_paper_drops_the_header_row_and_the_front_matter():
+    joined = " ".join(q.text for q in _grid())
+    for furniture in ("Roll Number", "Thapar Institute", "Q No.", "Attempt All Questions", "Maximum Marks"):
+        assert furniture not in joined, furniture
+
+
+def test_outcome_codes_are_not_mistaken_for_marks():
+    """C05 is course outcome five, not five marks. Its digits must not reach the total."""
+    from app.services.pyq_ingestion import _cell_marks
+
+    assert _cell_marks("C05") == 0
+    assert _cell_marks("CO2 L4") == 0
+    assert _cell_marks("05 CO1") == 5
+    assert _cell_marks("02") == 2
+
+
+def test_a_paper_without_the_grid_still_uses_general_numbering():
+    """The grid path must decline politely, not capture every paper it is offered."""
+    from app.services import pyq_ingestion
+
+    plain = "1. Define a data store with an example. [2]\n\n2. Explain balancing in a DFD. [5]\n"
+    assert pyq_ingestion.split_grid_questions(plain) is None
+    questions = pyq_ingestion.split_questions(plain)
+    assert [q.marks for q in questions] == [2, 5]

@@ -33,6 +33,49 @@ _MARKS = re.compile(
     re.IGNORECASE,
 )
 _MCQ_OPTIONS = re.compile(r"(?:^|\s)\(?[a-d]\)\s+\S", re.IGNORECASE)
+
+# --- institutional grid layout -------------------------------------------------------------
+# Many departments set papers as a table: Q No. | Questions | Marks | CO | BL. Extracting text
+# from such a PDF flattens the table, so the marks, outcome and Bloom cells arrive as their own
+# short lines, interleaved anywhere inside the question they belong to. Splitting on general
+# numbering then mistakes those cells, the header row, and any numbered list inside a question
+# body for question boundaries. Recognising the layout is what makes the difference between a
+# corpus of questions and a corpus of fragments.
+
+_GRID_HEADER = re.compile(r"\bQues(?:tions?)?\b.*\bMarks\b.*\bCO\b.*\bBL\b", re.IGNORECASE)
+# "Q1 ", "Q5. " and "Q2a " all start a question. The sub-part letter can follow the number
+# with no separator at all, and missing that merges the question into the one before it.
+_GRID_QUESTION = re.compile(r"^Q\s*\.?\s*(\d{1,2})\s*[.)]?\s*([a-z])?[.)]?\s+")
+# A line that is nothing but table cells. OCR of this column is unreliable: CO5 prints as C05,
+# and L1 as "L I" or "Ll", so the Bloom cell tolerates the letters those become.
+_GRID_CELLS = re.compile(r"^(?:\s*(?:\d{1,2}|C[O0]\s?\d|L\s?[1-6IiJlL]))+\s*$")
+_GRID_MARKS = re.compile(r"(?<![A-Za-z0-9])(\d{1,2})(?![A-Za-z0-9])")
+_GRID_BLOOM = re.compile(r"L\s?([1-6IiJlL])", re.IGNORECASE)
+
+# The level the paper itself assigns, which is better evidence than a cue verb in the stem.
+BLOOM_BY_LEVEL = {
+    "1": "remember", "2": "understand", "3": "apply",
+    "4": "analyze", "5": "evaluate", "6": "create",
+}
+
+
+def _cell_marks(cell: str) -> int:
+    """Marks on one table row.
+
+    Page numbers have already been removed against the page they appeared on, so a bare number
+    reaching here is a mark. Sub-parts are marked separately and their rows are summed. An outcome
+    cell such as "C05" contributes nothing: its digits belong to the code, not to a figure.
+    """
+    return sum(int(m.group(1)) for m in _GRID_MARKS.finditer(cell))
+
+
+def _bloom_from_cell(cells: str) -> str | None:
+    match = _GRID_BLOOM.search(cells)
+    if not match:
+        return None
+    # I, i, J, l and L are all what OCR makes of the 1 in L1.
+    level = match.group(1)
+    return BLOOM_BY_LEVEL.get("1" if level.upper() in {"I", "J", "L"} else level)
 _NUMERIC_CUE = re.compile(r"\b(calculate|compute|determine|find|evaluate the value|how many|what is the value)\b", re.IGNORECASE)
 
 
@@ -48,9 +91,13 @@ class ExtractedQuestion:
 def read_text(path: Path, source_type: str) -> str:
     """Document text with slide/PDF line wrapping repaired, as in course-material ingestion."""
     if source_type == "pdf":
-        return "\n".join(
-            line for page in PdfReader(str(path)).pages for line in _lines(page.extract_text() or "")
-        )
+        # A page number is dropped against the page it appears on. In a paper laid out as a
+        # table it is otherwise indistinguishable from a marks cell — both are a bare number
+        # alone on a line — and counting one inflates the total the paper actually carries.
+        out: list[str] = []
+        for index, page in enumerate(PdfReader(str(path)).pages, start=1):
+            out.extend(ln for ln in _lines(page.extract_text() or "") if ln.strip() != str(index))
+        return "\n".join(out)
     if source_type == "docx":
         return "\n".join(line for p in Document(path).paragraphs for line in _lines(p.text))
     return path.read_text(encoding="utf-8", errors="replace")
@@ -76,8 +123,58 @@ def infer_type(text: str, marks: int | None) -> str:
     return "short_answer"
 
 
+def split_grid_questions(text: str) -> list[ExtractedQuestion] | None:
+    """Split a paper laid out as a Q No. / Questions / Marks / CO / BL table.
+
+    Returns None when the layout is not that table, so the caller falls back to general
+    numbering. Sub-parts a) and b) stay attached to the question that introduces them: they share
+    its case study and are marked as one question on the paper.
+    """
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    header = next((i for i, ln in enumerate(lines) if _GRID_HEADER.search(ln)), None)
+    if header is None:
+        return None
+
+    blocks: list[tuple[str, list[str]]] = []
+    for line in lines[header + 1:]:  # everything above the header is front matter
+        match = _GRID_QUESTION.match(line)
+        if match:
+            number = match.group(1)
+            # "Q2a" and "Q2b" are two rows of one question: it carries a single case study and is
+            # numbered once on the paper, so they are joined rather than counted twice.
+            if blocks and blocks[-1][0] == number:
+                blocks[-1][1].append(line[match.end():].strip())
+            else:
+                blocks.append((number, [line[match.end():].strip()]))
+        elif blocks:
+            blocks[-1][1].append(line)
+    if len(blocks) < 2:
+        return None  # a header-like line in a paper that is not actually a grid
+
+    out: list[ExtractedQuestion] = []
+    for number, body in blocks:
+        cells = [ln for ln in body if _GRID_CELLS.match(ln)]
+        stem = re.sub(r"\s+", " ", " ".join(ln for ln in body if not _GRID_CELLS.match(ln))).strip()
+        if len(stem.split()) < 4:
+            continue
+        # Sub-parts are marked separately, so the question is worth their sum.
+        marks = sum(_cell_marks(cell) for cell in cells) or None
+        bloom = _bloom_from_cell(" ".join(cells)) or classify_bloom(stem)
+        out.append(
+            ExtractedQuestion(
+                number=number, text=stem, marks=marks,
+                question_type=infer_type(stem, marks), bloom_level=bloom,
+            )
+        )
+    return out or None
+
+
 def split_questions(text: str) -> list[ExtractedQuestion]:
     """Split a paper into questions on its numbering; fall back to blank-line blocks."""
+    grid = split_grid_questions(text)
+    if grid is not None:
+        return grid
+
     lines = [ln.strip() for ln in text.splitlines()]
     blocks: list[tuple[str | None, list[str]]] = []
     for line in lines:
