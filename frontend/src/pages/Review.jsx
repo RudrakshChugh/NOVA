@@ -99,7 +99,9 @@ export default function Review({ course, user, runId, go }) {
 
   const compliant = candidates.filter((q) => q.compliance?.is_compliant).length
   const decided = candidates.filter((q) => q.review).length
-  const canReview = user.role === 'reviewer'
+  // A coordinator judges ordinary candidates too; only the blinded evaluation queue is
+  // closed to them, because they can reveal which arm wrote a question.
+  const canReview = ['reviewer', 'coordinator'].includes(user.role)
 
   if (runs.length === 0) {
     return (
@@ -197,11 +199,6 @@ export default function Review({ course, user, runId, go }) {
         )}
       </Card>
 
-      {!canReview && (
-        <Note tone="warn" icon="lock">
-          You are viewing as coordinator. Only reviewers can record decisions.
-        </Note>
-      )}
       {error && <Note tone="bad">{error}</Note>}
 
       <div className="workbench">

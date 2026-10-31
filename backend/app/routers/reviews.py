@@ -16,7 +16,9 @@ _STATE_FOR = {"accept": "accepted", "edit": "edited", "reject": "rejected"}
 
 
 @router.post("/candidates/{question_id}/review", response_model=CandidateOut)
-def review(question_id: UUID, body: ReviewIn, user: User = Depends(require_role("reviewer")), db: Session = Depends(get_db)):
+def review(question_id: UUID, body: ReviewIn,
+           user: User = Depends(require_role("reviewer", "coordinator")),
+           db: Session = Depends(get_db)):
     q = db.get(CandidateQuestion, question_id)
     if q is None:
         raise HTTPException(404, "candidate not found")

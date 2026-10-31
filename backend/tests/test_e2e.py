@@ -330,3 +330,25 @@ def test_a_reviewer_cannot_discard_a_blueprint(client, new_course):
     course_id = new_course("DISCARD2", "Discard Roles")
     draft = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
     assert client.delete(f"/blueprints/{draft['blueprint_id']}", headers=reviewer).status_code == 403
+
+
+def test_a_coordinator_runs_the_workflow_but_is_barred_from_the_blinded_queue(client, new_course):
+    """With one person on a deployment the coordinator has to be able to generate and review, or
+    the workflow cannot be completed at all. The blinded evaluation queue stays closed to them:
+    a coordinator can reveal which arm produced a question, so letting one judge through that
+    queue would leave the blinding enforceable only by the person it constrains."""
+    coordinator = login(client, "coordinator@example.edu")
+    course_id = new_course("SOLO", "Solo Coordinator")
+
+    bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    rows = [{"course_outcome": "CO1 Explain DFD notation", "concept": "data store",
+             "bloom_level": "understand", "marks": 2, "question_type": "short_answer",
+             "target_difficulty": "easy"}]
+    client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
+    frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
+
+    started = client.post(f"/blueprints/{frozen['blueprint_id']}/generate", headers=coordinator)
+    assert started.status_code == 202, started.text
+
+    refused = client.get(f"/evaluation/blueprints/{frozen['blueprint_id']}/queue", headers=coordinator)
+    assert refused.status_code == 403, "the blinded queue must stay reviewer-only"

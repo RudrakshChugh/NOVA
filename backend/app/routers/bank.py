@@ -61,7 +61,8 @@ def _snapshot(db: Session, q: CandidateQuestion) -> dict:
     }
 
 
-@router.post("/candidates/publish", response_model=list[BankEntryOut], status_code=201, dependencies=[Depends(require_role("reviewer"))])
+@router.post("/candidates/publish", response_model=list[BankEntryOut], status_code=201,
+             dependencies=[Depends(require_role("reviewer", "coordinator"))])
 def publish(body: PublishIn, db: Session = Depends(get_db)):
     entries = []
     for qid in body.question_ids:

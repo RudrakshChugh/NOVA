@@ -88,11 +88,9 @@ export default function Generate({ course, user, go }) {
                 </select>
               </Field>
               <div style={{ alignSelf: 'flex-end' }}>
-                {user.role === 'reviewer'
-                  ? <Btn variant="primary" icon="play" busy={busy} disabled={!selected || !!running} onClick={start}>
-                    {running ? 'A run is in progress' : 'Start generation run'}
-                  </Btn>
-                  : <Note tone="warn" icon="lock">Only a faculty reviewer can start a run.</Note>}
+                <Btn variant="primary" icon="play" busy={busy} disabled={!selected || !!running} onClick={start}>
+                  {running ? 'A run is in progress' : 'Start generation run'}
+                </Btn>
               </div>
             </div>
 

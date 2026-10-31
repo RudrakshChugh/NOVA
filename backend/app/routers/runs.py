@@ -82,7 +82,8 @@ def get_run(db: Session, run_id: UUID) -> GenerationRun:
     return run
 
 
-@router.post("/blueprints/{blueprint_id}/generate", response_model=RunOut, status_code=202, dependencies=[Depends(require_role("reviewer"))])
+@router.post("/blueprints/{blueprint_id}/generate", response_model=RunOut, status_code=202,
+             dependencies=[Depends(require_role("reviewer", "coordinator"))])
 def generate(blueprint_id: UUID, background: BackgroundTasks, db: Session = Depends(get_db)):
     bp = db.get(Blueprint, blueprint_id)
     if bp is None:

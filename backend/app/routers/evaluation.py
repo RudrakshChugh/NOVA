@@ -67,6 +67,10 @@ def blinded_queue(blueprint_id: UUID, user: User = Depends(require_role("reviewe
                   db: Session = Depends(get_db)):
     """Every candidate of the study this reviewer has not yet judged, shuffled and unlabelled.
 
+    Reviewer-only, deliberately, where the rest of the workflow also admits a coordinator: a
+    coordinator can reveal which arm produced a question, so letting one judge through this queue
+    would make the blinding unenforceable by the same person it is meant to constrain.
+
     The arm that produced a question is never part of this response, and the order is randomised
     per reviewer, so a reviewer cannot tell which system wrote what (plan §3.3.4). The shuffle is
     seeded by reviewer and blueprint so a reload keeps the same order rather than re-randomising
