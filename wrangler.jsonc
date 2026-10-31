@@ -1,0 +1,13 @@
+{
+  // Assets-only Worker: it serves the built frontend and runs no code of its own, so there is no
+  // `main` entry point. The API lives on Render; this only ships the static bundle.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nova",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./frontend/dist",
+    // The app is a single page that reads its route from state, and the OAuth callback returns to
+    // "/#token=…". Any other path must still serve index.html rather than a 404.
+    "not_found_handling": "single-page-application"
+  }
+}
