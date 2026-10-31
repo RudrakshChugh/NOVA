@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, setToken } from './api'
+import { api, hasToken, setToken } from './api'
 import Icon from './components/Icon'
 import Shell from './components/Shell'
 import { Btn, Card, ToastHost } from './components/ui'
@@ -54,6 +54,11 @@ export default function App() {
   const signOut = () => { setToken(''); setUser(null); setCourse(null) }
 
   useEffect(() => {
+    // Only probe when a session is actually stored. Arriving from the sign-in callback the token
+    // is still in the URL fragment and nothing is in storage yet, so probing here would send a
+    // header-less request and log a 401 on every single sign-in — noise that hides real errors.
+    // Login captures the fragment and hands the user straight over.
+    if (!hasToken()) return setBooting(false)
     api('/auth/me').then(setUser).catch(() => setToken('')).finally(() => setBooting(false))
   }, [])
 

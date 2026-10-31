@@ -10,6 +10,8 @@ export function setToken(t) {
   else localStorage.removeItem('token')
 }
 
+export const hasToken = () => !!token
+
 export const loginUrl = () => `${API_BASE}/auth/login`
 
 export async function api(path, { method = 'GET', body, form } = {}) {
