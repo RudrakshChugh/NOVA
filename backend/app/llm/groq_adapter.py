@@ -6,11 +6,29 @@ for the keys the orchestrator relies on — a missing key has to fail here, not 
 """
 
 import json
+import time
 
 import httpx
 
 from ..config import settings
 from .base import GenerationRequest, GenerationResult, LLMAdapter
+
+# A free tier limits requests per minute, and one question can take four calls, so a run of any
+# size will meet a 429. Losing a whole run to one is not acceptable when waiting a few seconds
+# would have carried it through. 5xx are included because they are transient by definition.
+RETRYABLE = frozenset({408, 429, 500, 502, 503, 504})
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Groq says how long to wait. Honour it rather than guessing — guessing either wastes time or
+    retries too early and burns another request against the same limit."""
+    raw = response.headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return None  # the HTTP-date form; fall back to the backoff schedule
 
 
 class GroqAdapter(LLMAdapter):
@@ -20,6 +38,32 @@ class GroqAdapter(LLMAdapter):
         self.model = settings.groq_model
         self.backend_id = f"groq:{self.model}"
         self.url = settings.groq_url.rstrip("/")
+
+    def _post(self, payload: dict) -> httpx.Response:
+        """One call, retried through rate limits and transient server errors."""
+        backoff = 1.0
+        for attempt in range(settings.groq_max_retries + 1):
+            try:
+                r = httpx.post(
+                    f"{self.url}/chat/completions", json=payload,
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    timeout=settings.groq_timeout,
+                )
+            except httpx.HTTPError as e:
+                raise RuntimeError(f"Groq unreachable at {self.url}: {e}") from e
+
+            if r.status_code not in RETRYABLE:
+                if r.is_error:
+                    raise RuntimeError(f"Groq error {r.status_code}: {r.text[:200]}")
+                return r
+
+            if attempt == settings.groq_max_retries:
+                raise RuntimeError(
+                    f"Groq error {r.status_code} after {attempt + 1} attempts: {r.text[:200]}"
+                )
+            time.sleep(min(_retry_after(r) or backoff, settings.groq_max_backoff))
+            backoff *= 2
+        raise AssertionError("unreachable")  # the loop either returns or raises
 
     def generate(self, req: GenerationRequest) -> GenerationResult:
         required = req.json_schema.get("required") or list((req.json_schema.get("properties") or {}))
@@ -37,18 +81,7 @@ class GroqAdapter(LLMAdapter):
         }
         if req.seed is not None:
             payload["seed"] = req.seed
-        try:
-            r = httpx.post(
-                f"{self.url}/chat/completions", json=payload,
-                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                timeout=settings.groq_timeout,
-            )
-            r.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise RuntimeError(f"Groq error {e.response.status_code}: {e.response.text[:200]}") from e
-        except httpx.HTTPError as e:
-            raise RuntimeError(f"Groq unreachable at {self.url}: {e}") from e
-
+        r = self._post(payload)
         body = r.json()
         data = json.loads(body["choices"][0]["message"]["content"])
         missing = [k for k in required if k not in data]

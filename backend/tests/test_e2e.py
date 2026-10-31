@@ -214,3 +214,89 @@ def test_a_provider_connection_string_is_normalised_to_psycopg3():
     # an explicit driver is left exactly as written
     explicit = "postgresql+psycopg://u:p@h/db"
     assert Settings(database_url=explicit).database_url == explicit
+
+
+# --- hosted-backend resilience ------------------------------------------------------------------
+
+
+def _groq_response(status, body=None, headers=None):
+    import httpx
+
+    return httpx.Response(
+        status, json=body if body is not None else {"error": "rate limited"},
+        headers=headers or {}, request=httpx.Request("POST", "https://api.groq.com/x"),
+    )
+
+
+def test_groq_retries_a_rate_limit_instead_of_failing_the_run(monkeypatch):
+    """One question can take four calls, so any run of size will meet a 429 on a free tier.
+    Losing the whole run to it is unacceptable when waiting a moment carries it through."""
+    import httpx
+
+    from app.config import settings
+    from app.llm import groq_adapter
+
+    monkeypatch.setattr(settings, "groq_api_key", "test-key")
+    slept = []
+    monkeypatch.setattr(groq_adapter.time, "sleep", slept.append)
+
+    ok = {"choices": [{"message": {"content": '{"stem":"s","answer_key":"a","options":[],"citations":[]}'}}],
+          "model": "llama-3.3-70b-versatile"}
+    replies = [
+        _groq_response(429, headers={"retry-after": "2"}),
+        _groq_response(503),
+        _groq_response(200, ok),
+    ]
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: replies.pop(0))
+
+    result = groq_adapter.GroqAdapter().generate(
+        groq_adapter.GenerationRequest(
+            system="s", user="u", temperature=0.7, seed=1,
+            json_schema={"required": ["stem", "answer_key"]},
+        )
+    )
+    assert result.data["stem"] == "s"
+    assert slept == [2.0, 2.0], "honours Retry-After, then backs off"
+    # a seed Groq does not guarantee is recorded as unhonoured rather than claimed
+    assert result.seed is None
+
+
+def test_groq_gives_up_after_the_retry_budget(monkeypatch):
+    import httpx
+
+    from app.config import settings
+    from app.llm import groq_adapter
+
+    monkeypatch.setattr(settings, "groq_api_key", "test-key")
+    monkeypatch.setattr(settings, "groq_max_retries", 2)
+    monkeypatch.setattr(groq_adapter.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _groq_response(429))
+
+    with pytest.raises(RuntimeError, match="after 3 attempts"):
+        groq_adapter.GroqAdapter().generate(
+            groq_adapter.GenerationRequest(system="s", user="u", temperature=0.7, seed=None,
+                                           json_schema={"required": ["stem"]})
+        )
+
+
+def test_groq_does_not_retry_a_bad_api_key(monkeypatch):
+    """A 401 is not transient. Retrying it wastes a minute and reports the wrong cause."""
+    import httpx
+
+    from app.config import settings
+    from app.llm import groq_adapter
+
+    monkeypatch.setattr(settings, "groq_api_key", "wrong")
+    calls = []
+
+    def once(*a, **k):
+        calls.append(1)
+        return _groq_response(401, {"error": "invalid api key"})
+
+    monkeypatch.setattr(httpx, "post", once)
+    with pytest.raises(RuntimeError, match="Groq error 401"):
+        groq_adapter.GroqAdapter().generate(
+            groq_adapter.GenerationRequest(system="s", user="u", temperature=0.7, seed=None,
+                                           json_schema={"required": ["stem"]})
+        )
+    assert len(calls) == 1

@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     groq_model: str = "llama-3.3-70b-versatile"
     groq_url: str = "https://api.groq.com/openai/v1"
     groq_timeout: float = 120.0
+    groq_max_retries: int = 4  # a free tier's per-minute limit is met by any run of size
+    groq_max_backoff: float = 30.0
     # Cloudflare Access sits in front of the tunnel, so Ollama is never openly exposed.
     cf_access_client_id: str | None = None
     cf_access_client_secret: str | None = None
