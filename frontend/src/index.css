@@ -160,6 +160,13 @@ a:hover { text-decoration-color: currentColor; }
 .nav-item.done .nav-step { background: var(--ok-50); color: var(--ok-600); border-color: var(--ok-200); }
 .nav-item.done[aria-current="page"] .nav-step { background: var(--brand-600); color: #fff; border-color: transparent; }
 
+/* Unanswered work riding on the navigation item it belongs to. */
+.nav-count {
+  flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-full);
+  background: var(--warn-600); color: #fff; font-size: 11px; font-weight: 700;
+  display: grid; place-items: center;
+}
+
 .sidebar-foot { border-top: 1px solid var(--line); padding: var(--s3); }
 .who { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
 .avatar {

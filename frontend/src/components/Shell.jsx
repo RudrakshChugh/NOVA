@@ -29,7 +29,7 @@ function initials(name) {
   return name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()
 }
 
-export default function Shell({ user, course, step, progress, go, onSignOut, children }) {
+export default function Shell({ user, course, step, progress, waiting = 0, go, onSignOut, children }) {
   const [open, setOpen] = useState(false)
   const current = ALL.find((s) => s.key === step)
   const inWorkflow = WORKFLOW.some((s) => s.key === step)
@@ -91,6 +91,9 @@ export default function Shell({ user, course, step, progress, go, onSignOut, chi
                 >
                   <Icon name={s.icon} size={17} />
                   <span className="label">{s.label}</span>
+                  {s.key === 'people' && waiting > 0 && (
+                    <span className="nav-count" title={`${waiting} waiting for a role`}>{waiting}</span>
+                  )}
                 </button>
               ))}
             </div>

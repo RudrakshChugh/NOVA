@@ -50,6 +50,7 @@ export default function App() {
   const [step, setStep] = useState('materials')
   const [runId, setRunId] = useState(null)
   const [progress, setProgress] = useState({})
+  const [waiting, setWaiting] = useState(0)
 
   const signOut = () => { setToken(''); setUser(null); setCourse(null) }
 
@@ -83,6 +84,15 @@ export default function App() {
   }, [course])
   useEffect(() => { refreshProgress().catch(() => {}) }, [refreshProgress, step])
 
+  // Someone signing in creates an account that can do nothing until a coordinator grants it a
+  // role. Nothing else would say so, so the count rides on the navigation itself.
+  useEffect(() => {
+    if (user?.role !== 'coordinator') return
+    api('/auth/people')
+      .then((people) => setWaiting(people.filter((p) => p.role === 'pending').length))
+      .catch(() => {})
+  }, [user, step])
+
   if (booting) return <div className="boot"><span className="spinner" style={{ width: 20, height: 20 }} />Loading…</div>
   if (!user) return <ToastHost><Login onLogin={setUser} /></ToastHost>
   if (user.role === 'pending') return <ToastHost><AwaitingApproval user={user} onSignOut={signOut} /></ToastHost>
@@ -101,7 +111,10 @@ export default function App() {
 
   return (
     <ToastHost>
-      <Shell user={user} course={course} step={step} progress={progress} go={go} onSignOut={signOut}>
+      <Shell
+        user={user} course={course} step={step} progress={progress} waiting={waiting}
+        go={go} onSignOut={signOut}
+      >
         <Page course={course} user={user} go={go} runId={runId} />
       </Shell>
     </ToastHost>
