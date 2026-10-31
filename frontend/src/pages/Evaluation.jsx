@@ -30,7 +30,7 @@ function Arms({ arms, selected, onToggle, editable }) {
             <Badge tone={KIND[a.kind]?.tone}>{KIND[a.kind]?.label}</Badge>
             <div className="mono" style={{ marginTop: 3 }}>{label}</div>
           </td>
-          <td className="muted" style={{ maxWidth: 320 }}>{a.description}</td>
+          <td className="muted prose">{a.description}</td>
           <td className="muted">{a.full_material ? 'whole material' : a.retrieval ? 'retrieved passages' : 'none'}</td>
           <td>{yn(a.blueprint_in_prompt)}</td>
           <td>{yn(a.enforce_compliance)}</td>

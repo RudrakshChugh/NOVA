@@ -184,7 +184,11 @@ a:hover { text-decoration-color: currentColor; }
   gap: var(--s3); padding: 0 var(--s6); background: rgba(255, 255, 255, .85);
   backdrop-filter: saturate(1.4) blur(8px); border-bottom: 1px solid var(--line);
 }
-.topbar .crumb { display: flex; align-items: center; gap: var(--s2); font-size: 13px; color: var(--muted); }
+.topbar .crumb {
+  display: flex; align-items: center; gap: var(--s2); font-size: 13px; color: var(--muted);
+  min-width: 0; white-space: nowrap; overflow: hidden;
+}
+.topbar .crumb strong { overflow: hidden; text-overflow: ellipsis; }
 .topbar .crumb strong { color: var(--ink); font-weight: 600; font-size: 14px; }
 .topbar .spacer { flex: 1; }
 .topbar .menu-btn { display: none; }
@@ -304,6 +308,9 @@ input, select, textarea {
   font: inherit; font-size: 13.5px; color: var(--ink); padding: 7px 10px;
   border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--n-0);
   transition: border-color .12s, box-shadow .12s;
+  /* A select sizes itself to its widest option, so one long label — a run's timestamp, a
+     blueprint's description — pushes the whole page wider than the screen. */
+  max-width: 100%;
 }
 input:hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) { border-color: var(--n-400); }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--brand-500); box-shadow: var(--ring); }
@@ -380,6 +387,10 @@ td.num, th.num { text-align: right; }
 /* a row holding nothing but a nested panel should not get hover paint */
 tr.panel-row:hover > td { background: var(--n-50); }
 tr.panel-row > td { background: var(--n-50); padding: var(--s3); }
+
+/* A column of prose gets a floor: squeezed below this it wraps to one word per line, which is
+   far worse to read than a table that scrolls sideways. */
+.table-wrap td.prose { min-width: 240px; white-space: normal; }
 
 /* ─── meter & progress ───────────────────────────────────────────────────────────────────── */
 
@@ -586,6 +597,35 @@ kbd {
   .login-pitch ul { display: none; }
 }
 
+/* Phones. The sidebar is already a drawer by here; what is left is keeping single-line things
+   single-line, letting actions sit under what they act on, and reclaiming horizontal padding. */
+@media (max-width: 560px) {
+  .page-head .row.top { flex-direction: column; align-items: stretch; }
+  .page-head .row.top .row { justify-content: flex-start; }
+  .page-head .lede { font-size: 14px; }
+  .card-head { flex-direction: column; align-items: stretch; gap: var(--s2); }
+  .card-head .actions { justify-content: flex-start; flex-wrap: wrap; }
+  .card-body, .card-head, .card-foot { padding: var(--s4); }
+  .divide { margin-left: calc(-1 * var(--s4)); margin-right: calc(-1 * var(--s4)); padding: var(--s4) var(--s4) 0; }
+  .explainer .body { padding-left: var(--s4); }
+  .decision-bar { padding: var(--s3) var(--s4); }
+  .decision-bar .btn { flex: 1 1 100%; }
+  .decision-bar .spacer { display: none; }
+  .stats { grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: var(--s2); }
+  .stat { padding: var(--s3); }
+  .stat .stat-value { font-size: 19px; }
+  .toasts { right: var(--s3); left: var(--s3); bottom: var(--s3); max-width: none; }
+  .segmented { flex-wrap: wrap; }
+  .kv, .legend, .shortcut-sheet { grid-template-columns: 1fr; gap: 2px var(--s3); }
+  .kv dt, .legend dt { margin-top: var(--s2); }
+  .shortcut-sheet dt { text-align: left; }
+  .queue { max-height: 320px; }
+  /* A squeezed table is unreadable; a scrolling one is merely narrow. */
+  .table-wrap { -webkit-overflow-scrolling: touch; }
+  .table-wrap td, .table-wrap th { white-space: nowrap; }
+  .table-wrap td.wrap { white-space: normal; min-width: 220px; }
+}
+
 @media (max-width: 720px) {
   .app { grid-template-columns: minmax(0, 1fr); }
   .sidebar {
@@ -602,6 +642,7 @@ kbd {
   .topbar { padding: 0 var(--s4); }
   .grid-2 { grid-template-columns: minmax(0, 1fr); }
   .page-head h1 { font-size: 20px; }
+  .topbar .crumb > span:first-of-type, .topbar .crumb > .ico { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

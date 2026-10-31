@@ -79,7 +79,7 @@ function Novelty({ n }) {
         {n.signals.map((sig) => (
           <tr key={sig.name}>
             <td className="cap" style={{ fontWeight: 550 }}>{sig.name}</td>
-            <td className="muted">{SIGNAL_HELP[sig.name]}</td>
+            <td className="muted prose">{SIGNAL_HELP[sig.name]}</td>
             <td><Meter value={sig.value} /></td>
             {fitted && <td className="num">{sig.weight == null ? '—' : sig.weight.toFixed(3)}</td>}
           </tr>

@@ -257,7 +257,7 @@ export default function Engines({ course, user }) {
                 {Object.entries(model.coefficients).map(([name, w]) => (
                   <tr key={name}>
                     <td className="cap" style={{ fontWeight: 550 }}>{name}</td>
-                    <td className="muted">{SIGNAL_HELP[name]}</td>
+                    <td className="muted prose">{SIGNAL_HELP[name]}</td>
                     <td className="num">{w.toFixed(3)}</td>
                   </tr>
                 ))}
