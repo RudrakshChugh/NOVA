@@ -411,3 +411,36 @@ def test_an_unrelated_error_is_not_decorated_with_a_model_list(monkeypatch):
             groq_adapter.GenerationRequest(system="s", user="u", temperature=0.7, seed=None,
                                            json_schema={"required": ["stem"]})
         )
+
+
+def test_an_unlisted_address_gets_no_role_and_the_grant_is_recorded(client):
+    """Nothing hands out a role by default. An address that is not configured as a coordinator
+    arrives with none at all, and when one is granted the record says who granted it — otherwise
+    "was that account made a coordinator deliberately?" cannot be answered from the data."""
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import RoleChange, User
+    from app.routers import auth as auth_router
+
+    with SessionLocal() as db:
+        before = db.scalar(select(User).where(User.email == "stranger@example.edu"))
+        assert before is None, "fixture assumption"
+        # provisioning with an address that is not on the coordinator list
+        user = auth_router._provision(db, {"email": "Stranger@example.edu", "name": "A Stranger"})
+        assert user.role == "pending"
+        assert "stranger@example.edu" not in settings.coordinators
+
+        created = db.scalar(select(RoleChange).where(RoleChange.user_id == user.user_id))
+        assert created.actor_id is None and created.to_role == "pending"
+
+    coordinator = login(client, "coordinator@example.edu")
+    granted = client.post(f"/auth/people/{user.user_id}/role",
+                          json={"role": "reviewer"}, headers=coordinator)
+    assert granted.status_code == 200 and granted.json()["role"] == "reviewer"
+
+    people = client.get("/auth/people", headers=coordinator).json()
+    row = next(p for p in people if p["email"] == "stranger@example.edu")
+    assert row["role_set_by"] == "Course Coordinator"
+    assert "People screen" in row["role_reason"]

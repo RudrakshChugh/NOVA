@@ -27,8 +27,8 @@ from sqlalchemy.orm import Session
 from ..auth import current_user, issue_token, require_role
 from ..config import settings
 from ..db import get_db
-from ..models import User
-from ..schemas import DevLoginIn, RoleIn, TokenOut, UserOut
+from ..models import RoleChange, User
+from ..schemas import DevLoginIn, PersonOut, RoleIn, TokenOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -84,12 +84,19 @@ def _provision(db: Session, info: dict) -> User:
     user = db.scalar(select(User).where(User.email == email))
     if user is not None:
         return user
+    listed = email in settings.coordinators
     user = User(
         email=email,
         name=info.get("name") or email.split("@")[0],
-        role="coordinator" if email in settings.coordinators else "pending",
+        role="coordinator" if listed else "pending",
     )
     db.add(user)
+    db.flush()
+    db.add(RoleChange(
+        user_id=user.user_id, actor_id=None, from_role=None, to_role=user.role,
+        reason=("first sign-in: address is listed in COORDINATOR_EMAILS" if listed
+                else "first sign-in: awaiting a role"),
+    ))
     db.commit()
     return user
 
@@ -174,10 +181,24 @@ def users(db: Session = Depends(get_db)):
 # --- role management ---
 
 
-@router.get("/people", response_model=list[UserOut], dependencies=[Depends(require_role("coordinator"))])
+@router.get("/people", response_model=list[PersonOut], dependencies=[Depends(require_role("coordinator"))])
 def people(db: Session = Depends(get_db)):
-    """Everyone who has signed in, so a coordinator can see who is waiting."""
-    return db.scalars(select(User).order_by(User.role, User.email)).all()
+    """Everyone who has signed in, with how each came to hold their role."""
+    users = db.scalars(select(User).order_by(User.role, User.email)).all()
+    actors = {u.user_id: u.name for u in users}
+    out = []
+    for user in users:
+        latest = db.scalar(
+            select(RoleChange).where(RoleChange.user_id == user.user_id)
+            .order_by(RoleChange.changed_at.desc()).limit(1)
+        )
+        person = PersonOut.model_validate(user, from_attributes=True)
+        if latest is not None:
+            person.role_set_by = actors.get(latest.actor_id) if latest.actor_id else None
+            person.role_set_at = latest.changed_at
+            person.role_reason = latest.reason
+        out.append(person)
+    return out
 
 
 @router.post("/people/{user_id}/role", response_model=UserOut)
@@ -192,6 +213,11 @@ def set_role(user_id: str, body: RoleIn, db: Session = Depends(get_db),
     # themselves locks the deployment out of its only privileged screen, with no way back in.
     if target.user_id == actor.user_id:
         raise HTTPException(400, "you cannot change your own role")
+    was = target.role
     target.role = body.role
+    db.add(RoleChange(
+        user_id=target.user_id, actor_id=actor.user_id, from_role=was, to_role=body.role,
+        reason="granted on the People screen",
+    ))
     db.commit()
     return target

@@ -24,6 +24,14 @@ class RoleIn(BaseModel):
     role: str
 
 
+class PersonOut(UserOut):
+    """A user plus how they came to hold the role they hold."""
+
+    role_set_by: str | None = None  # null means configuration, not a person
+    role_set_at: datetime | None = None
+    role_reason: str | None = None
+
+
 class TokenOut(BaseModel):
     token: str
     user: UserOut

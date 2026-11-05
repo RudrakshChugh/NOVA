@@ -73,7 +73,7 @@ export default function People({ user }) {
         ) : people.length === 0 ? (
           <Empty icon="shield" title="Nobody has signed in yet" />
         ) : (
-          <Table head={['Person', 'Role', 'What they can do', { label: '', width: 260 }]}>
+          <Table head={['Person', 'Role', 'How they got it', { label: '', width: 260 }]}>
             {people.map((p) => {
               const self = p.user_id === user.user_id
               return (
@@ -83,7 +83,18 @@ export default function People({ user }) {
                     <div className="muted">{p.email}</div>
                   </td>
                   <td><Badge tone={ROLE_TONE[p.role]} dot>{p.role}</Badge></td>
-                  <td className="muted">{ROLE_HELP[p.role]}</td>
+                  <td className="muted prose">
+                    {p.role_set_at ? (
+                      <>
+                        {p.role_set_by
+                          ? <>Granted by <strong>{p.role_set_by}</strong></>
+                          : <>Set automatically — {p.role_reason}</>}
+                        <div style={{ fontSize: 12 }}>{new Date(p.role_set_at).toLocaleString()}</div>
+                      </>
+                    ) : (
+                      <span title="This account predates role auditing">no record</span>
+                    )}
+                  </td>
                   <td>
                     {self ? (
                       <span className="muted">You cannot change your own role.</span>

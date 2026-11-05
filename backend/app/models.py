@@ -29,6 +29,26 @@ class User(Base):
     role: Mapped[str] = mapped_column(Text, default="pending")
 
 
+class RoleChange(Base):
+    """Every role a user has ever held, and who put them there.
+
+    Without this, "was that account made a coordinator deliberately or by configuration?" is
+    unanswerable from the data — the only record is the role itself, which looks identical either
+    way. Granting access is the one action here that widens what somebody can do, so it is the one
+    that most needs a trail.
+    """
+
+    __tablename__ = "role_changes"
+    change_id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.user_id"))
+    # Null when no person did it: the role came from configuration at first sign-in.
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.user_id"), nullable=True)
+    from_role: Mapped[str | None] = mapped_column(Text, nullable=True)
+    to_role: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Course(Base):
     __tablename__ = "courses"
     course_id: Mapped[uuid.UUID] = _uuid_pk()
