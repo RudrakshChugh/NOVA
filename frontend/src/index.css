@@ -104,106 +104,59 @@
 }
 
 /* ─── dark theme ─────────────────────────────────────────────────────────────────────────── */
-/* The whole interface is drawn from the ramps above, so the theme is those ramps restated — not
-   a second stylesheet. The neutral ramp inverts: --n-0 stops meaning "white" and starts meaning
-   "the surface furthest back", which is what every rule using it actually intended.
+/* Opt-in only. Nothing here applies until the switch is used: there is no prefers-color-scheme
+   rule, so a first visit is light whatever the operating system is set to.
 
-   Two things are deliberately not simple inversions. The brand tints (50-200) become dark blues
-   rather than light ones, because a pale blue panel on a dark page glares. And the brand itself
-   lifts from #1f4e79 to a lighter blue: the committed blue is 2.1:1 against a dark surface,
-   which fails, while the lifted one passes. Dark mode is not "the same colours, flipped". */
+   The ramp is neutral. A dark theme built on blue-grey tints every surface and every piece of
+   body text slightly blue, which is the thing that makes a dark mode look tinted rather than
+   dark. Blue is kept for what you can click and nothing else.
+
+   Text is near-white, not grey. --n-800 is what --ink resolves to, so it carries most of the
+   reading on every screen and has no business being dim. */
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --n-0: #15181c;
-  --n-25: #191d22;
-  --n-50: #1e232a;
-  --n-100: #242a32;
-  --n-200: #2f3741;
-  --n-300: #3f4955;
-  --n-400: #6b7785;
-  --n-500: #93a0ae;
-  --n-600: #b4bfca;
-  --n-700: #ccd5de;
-  --n-800: #e3e9ef;
-  --n-900: #f4f7fa;
+  --n-0: #121212;
+  --n-25: #171717;
+  --n-50: #1c1c1c;
+  --n-100: #232323;
+  --n-200: #2f2f2f;
+  --n-300: #404040;
+  --n-400: #8a8a8a;
+  --n-500: #a0a0a0;
+  --n-600: #c8c8c8;
+  --n-700: #dedede;
+  --n-800: #f0f0f0;
+  --n-900: #fbfbfb;
 
-  --brand-50: #16273a;
-  --brand-100: #1c3a56;
-  --brand-200: #27486b;
-  --brand-300: #35608d;
-  --brand-400: #4e7cab;
-  --brand-500: #6b97c2;
-  --brand-600: #8ab1d4;
-  --brand-700: #a5c5e2;
-  --brand-800: #c2daf0;
-  --brand-900: #e0edf9;
+  /* Panels stay dark; only 500 and up are ever put on top of one. */
+  --brand-50: #13202b;
+  --brand-100: #1a2c3a;
+  --brand-200: #24405a;
+  --brand-300: #33597c;
+  --brand-400: #4a7aa5;
+  --brand-500: #6a99c2;
+  --brand-600: #8fb8d8;
+  --brand-700: #abcbe4;
+  --brand-800: #c8dff1;
+  --brand-900: #e3eff9;
 
-  --ok-50: #112a19; --ok-200: #24502f; --ok-600: #7fcf96; --ok-700: #a3e0b4;
-  --bad-50: #2e1715; --bad-200: #5c2c26; --bad-600: #f09086; --bad-700: #f6b4ac;
-  --warn-50: #2b2210; --warn-200: #54421a; --warn-600: #e3bd6a; --warn-700: #f0d396;
+  --ok-50: #13251a; --ok-200: #2b4c34; --ok-600: #86d49c; --ok-700: #abe3ba;
+  --bad-50: #2b1714; --bad-200: #572c24; --bad-600: #f29587; --bad-700: #f7b9ae;
+  --warn-50: #2a2211; --warn-200: #52421c; --warn-600: #e6c173; --warn-700: #f1d79c;
 
-  --glass: rgba(21, 24, 28, .85);
-  --glass-strong: rgba(21, 24, 28, .92);
-  --mark-bg: #5a4a14;
-  --mark-ring: rgba(240, 211, 150, .25);
-  --on-brand: #0f1419;
-  --toast-bg: #2b323b;
-  --toast-ink: #f4f7fa;
-  --toast-ink-soft: #aab4c0;
+  --glass: rgba(18, 18, 18, .88);
+  --glass-strong: rgba(18, 18, 18, .94);
+  --mark-bg: #5b4a14;
+  --mark-ring: rgba(241, 215, 156, .25);
+  --on-brand: #101010;
+  --toast-bg: #2c2c2c;
+  --toast-ink: #fbfbfb;
+  --toast-ink-soft: #bdbdbd;
 
-  --sh-md: 0 2px 8px -2px rgba(0, 0, 0, .55);
-  --sh-lg: 0 16px 40px -12px rgba(0, 0, 0, .7);
+  --sh-md: 0 2px 8px -2px rgba(0, 0, 0, .6);
+  --sh-lg: 0 16px 40px -12px rgba(0, 0, 0, .75);
   --ring: 0 0 0 3px var(--n-0), 0 0 0 5px var(--brand-600);
-}
-
-/* Follow the operating system unless the person has chosen for themselves. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-
-    --n-0: #15181c;
-    --n-25: #191d22;
-    --n-50: #1e232a;
-    --n-100: #242a32;
-    --n-200: #2f3741;
-    --n-300: #3f4955;
-    --n-400: #6b7785;
-    --n-500: #93a0ae;
-    --n-600: #b4bfca;
-    --n-700: #ccd5de;
-    --n-800: #e3e9ef;
-    --n-900: #f4f7fa;
-
-    --brand-50: #16273a;
-    --brand-100: #1c3a56;
-    --brand-200: #27486b;
-    --brand-300: #35608d;
-    --brand-400: #4e7cab;
-    --brand-500: #6b97c2;
-    --brand-600: #8ab1d4;
-    --brand-700: #a5c5e2;
-    --brand-800: #c2daf0;
-    --brand-900: #e0edf9;
-
-    --ok-50: #112a19; --ok-200: #24502f; --ok-600: #7fcf96; --ok-700: #a3e0b4;
-    --bad-50: #2e1715; --bad-200: #5c2c26; --bad-600: #f09086; --bad-700: #f6b4ac;
-    --warn-50: #2b2210; --warn-200: #54421a; --warn-600: #e3bd6a; --warn-700: #f0d396;
-
-    --glass: rgba(21, 24, 28, .85);
-    --glass-strong: rgba(21, 24, 28, .92);
-    --mark-bg: #5a4a14;
-    --mark-ring: rgba(240, 211, 150, .25);
-    --on-brand: #0f1419;
-  --toast-bg: #2b323b;
-  --toast-ink: #f4f7fa;
-  --toast-ink-soft: #aab4c0;
-
-    --sh-md: 0 2px 8px -2px rgba(0, 0, 0, .55);
-    --sh-lg: 0 16px 40px -12px rgba(0, 0, 0, .7);
-    --ring: 0 0 0 3px var(--n-0), 0 0 0 5px var(--brand-600);
-  }
-
 }
 
 * { box-sizing: border-box; }
@@ -464,7 +417,8 @@ input, select, textarea {
 }
 input:hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) { border-color: var(--n-400); }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--brand-500); box-shadow: var(--ring); }
-input::placeholder, textarea::placeholder { color: var(--n-400); }
+/* Placeholder is text. --n-400 is a border grey and too faint to read in either theme. */
+input::placeholder, textarea::placeholder { color: var(--n-500); }
 textarea { width: 100%; resize: vertical; line-height: 1.55; }
 select { padding-right: var(--s5); appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236c7988' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 9px center; }
 input[type="file"] { padding: 5px; border-style: dashed; background: var(--surface-sunken); font-size: 14.5px; }
@@ -614,8 +568,8 @@ tr.panel-row > td { background: var(--n-50); padding: var(--s3); }
 .toast .body span { color: var(--toast-ink-soft); font-size: 14.5px; }
 .toast.ok .ico { color: #7ee2a0; }
 .toast.bad .ico { color: #ff9f96; }
-.toast.info .ico { color: var(--brand-200); }
-.toast button { border: 0; background: none; color: var(--n-400); cursor: pointer; padding: 0; flex: none; }
+.toast.info .ico { color: #8bb1d4; }
+.toast button { border: 0; background: none; color: var(--toast-ink-soft); cursor: pointer; padding: 0; flex: none; }
 .toast button:hover { color: var(--toast-ink); }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
 
@@ -715,10 +669,11 @@ kbd {
   box-shadow: none;
 }
 .login-pitch h1 { margin: var(--s5) 0 var(--s3); font-size: 30px; letter-spacing: -.02em; max-width: 22ch; }
-.login-pitch p { color: var(--brand-100); font-size: 15px; max-width: 48ch; }
+.login-pitch p { color: #dce8f3; font-size: 15px; max-width: 48ch; }
 .login-pitch ul { list-style: none; padding: 0; margin: var(--s7) 0 0; display: flex; flex-direction: column; gap: var(--s4); max-width: 46ch; }
-.login-pitch li { display: flex; gap: var(--s3); font-size: 14px; color: var(--brand-100); }
-.login-pitch li .ico { flex: none; color: var(--brand-200); margin-top: 2px; }
+.login-pitch li { display: flex; gap: var(--s3); font-size: 14px; color: #dce8f3; }
+/* The panel is pinned to deep blue, so everything drawn on it is pinned too. */
+.login-pitch li .ico { flex: none; color: #8bb1d4; margin-top: 2px; }
 .login-pitch li strong { display: block; color: #fff; font-weight: 600; }
 .login-form { display: grid; place-items: center; padding: var(--s7) var(--s6); }
 .login-form .inner { width: 100%; max-width: 400px; }
@@ -829,12 +784,14 @@ kbd {
   transition: transform .18s ease;
 }
 .theme-switch[aria-checked="true"] .knob { transform: translateX(26px); }
-.theme-switch[aria-checked="true"] .track { background: var(--brand-800); border-color: var(--brand-700); }
+/* Pinned, not drawn from the ramp: --brand-800 is a PALE blue in dark mode, so the white
+   moon sat on a near-white track and vanished. */
+.theme-switch[aria-checked="true"] .track { background: #1f4e79; border-color: #1f4e79; }
 /* Each icon dims when the knob is parked over it, so the one you would move to stays legible. */
 .theme-switch .t-sun, .theme-switch .t-moon { position: relative; z-index: 1; transition: color .18s, opacity .18s; }
-.theme-switch .t-sun { color: var(--warn-600); }
-.theme-switch .t-moon { color: var(--n-400); }
-.theme-switch[aria-checked="true"] .t-sun { color: var(--brand-300); opacity: .65; }
+.theme-switch .t-sun { color: #b4842a; }
+.theme-switch .t-moon { color: var(--n-500); }
+.theme-switch[aria-checked="true"] .t-sun { color: #cfe0ef; opacity: .6; }
 .theme-switch[aria-checked="true"] .t-moon { color: #fff; opacity: 1; }
 .theme-switch[aria-checked="false"] .t-sun { opacity: .55; }
 @media (prefers-reduced-motion: reduce) {

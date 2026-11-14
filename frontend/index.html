@@ -9,9 +9,9 @@
       // Applied before the first paint. Without this the page renders light, then flips to dark
       // once React mounts — a white flash on every single load for anyone using dark mode.
       try {
-        var t = localStorage.getItem('theme')
-        if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t
-      } catch (e) { /* private window: fall back to the system preference */ }
+        document.documentElement.dataset.theme =
+          localStorage.getItem('theme') === 'dark' ? 'dark' : 'light'
+      } catch (e) { /* private window: light, like everyone else's first visit */ }
     </script>
   </head>
   <body>
