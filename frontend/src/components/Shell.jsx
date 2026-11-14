@@ -4,6 +4,7 @@
 
 import { useState } from 'react'
 import Icon from './Icon'
+import ThemeSwitch from './ThemeSwitch'
 import { Badge, Btn } from './ui'
 
 const WORKFLOW = [
@@ -142,6 +143,7 @@ export default function Shell({ user, course, courses = [], onPickCourse, step, 
           </div>
           <div className="spacer" />
           {inWorkflow && current && <Badge tone="outline">{current.who}’s step</Badge>}
+          <ThemeSwitch />
         </header>
         <main className="content">{children}</main>
       </div>

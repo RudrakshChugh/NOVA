@@ -26,15 +26,19 @@ BLOOM_LEVEL = {
 }
 
 _base = getSampleStyleSheet()
-TITLE = ParagraphStyle("paper-title", parent=_base["Title"], fontSize=14, leading=18, spaceAfter=2)
-SUBTITLE = ParagraphStyle("paper-sub", parent=_base["Normal"], fontSize=10.5, leading=14,
+
+# An Indian university question paper is set in Times, not in the Helvetica ReportLab
+# defaults to, and the screen that assembles it is set in Times for the same reason.
+SERIF, SERIF_BOLD = "Times-Roman", "Times-Bold"
+TITLE = ParagraphStyle("paper-title", parent=_base["Title"], fontName=SERIF_BOLD, fontSize=14, leading=18, spaceAfter=2)
+SUBTITLE = ParagraphStyle("paper-sub", parent=_base["Normal"], fontName=SERIF, fontSize=10.5, leading=14,
                           alignment=TA_CENTER, spaceAfter=1)
-META = ParagraphStyle("paper-meta", parent=_base["Normal"], fontSize=9.5, leading=13)
-INSTRUCTION = ParagraphStyle("paper-inst", parent=_base["Normal"], fontSize=9, leading=12.5,
+META = ParagraphStyle("paper-meta", parent=_base["Normal"], fontName=SERIF, fontSize=9.5, leading=13)
+INSTRUCTION = ParagraphStyle("paper-inst", parent=_base["Normal"], fontName=SERIF, fontSize=9, leading=12.5,
                              textColor=colors.HexColor("#333333"))
-BODY = ParagraphStyle("paper-body", parent=_base["Normal"], fontSize=10, leading=14)
-CELL = ParagraphStyle("paper-cell", parent=_base["Normal"], fontSize=9, leading=12)
-ANSWER = ParagraphStyle("paper-answer", parent=_base["Normal"], fontSize=9.5, leading=13,
+BODY = ParagraphStyle("paper-body", parent=_base["Normal"], fontName=SERIF, fontSize=10, leading=14)
+CELL = ParagraphStyle("paper-cell", parent=_base["Normal"], fontName=SERIF, fontSize=9, leading=12)
+ANSWER = ParagraphStyle("paper-answer", parent=_base["Normal"], fontName=SERIF, fontSize=9.5, leading=13,
                         textColor=colors.HexColor("#1f4e79"))
 
 HEADER_RULE = TableStyle([
@@ -45,7 +49,7 @@ GRID = TableStyle([
     ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#999999")),
     ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ededed")),
-    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+    ("FONTNAME", (0, 0), (-1, 0), SERIF_BOLD),
     ("FONTSIZE", (0, 0), (-1, 0), 9),
     ("ALIGN", (2, 0), (-1, -1), "CENTER"),
     ("LEFTPADDING", (0, 0), (-1, -1), 5),

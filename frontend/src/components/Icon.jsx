@@ -32,6 +32,8 @@ const PATHS = {
   download: 'M12 3v12m-4.5-4.5L12 15l4.5-4.5M4 19h16',
   clock: 'M12 7v5l3 2M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0z',
   sort: 'M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3',
+  sun: 'M12 4V2M12 22v-2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4M8 12a4 4 0 1 0 8 0 4 4 0 0 0-8 0z',
+  moon: 'M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z',
 }
 
 export default function Icon({ name, size = 18, className = '', title, style }) {
