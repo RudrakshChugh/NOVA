@@ -101,12 +101,12 @@ export default function Review({ course, user, runId, go }) {
   const decided = candidates.filter((q) => q.review).length
   // A coordinator judges ordinary candidates too; only the blinded evaluation queue is
   // closed to them, because they can reveal which arm wrote a question.
-  const canReview = ['reviewer', 'coordinator'].includes(user.role)
+  const canReview = ['reviewer', 'coordinator'].includes(course.your_role)
 
   if (runs.length === 0) {
     return (
       <>
-        <PageHead eyebrow="Step 4 of 5" title="Review candidates" />
+        <PageHead eyebrow="Step 4 of 6" title="Review candidates" />
         <Card>
           <Empty icon="review" title="No completed run yet" action={<Btn variant="primary" onClick={() => go('generate')}>Go to step 3</Btn>}>
             Candidates appear here once a generation run finishes. Each one arrives with its audit
@@ -120,7 +120,7 @@ export default function Review({ course, user, runId, go }) {
   return (
     <>
       <PageHead
-        eyebrow="Step 4 of 5"
+        eyebrow="Step 4 of 6"
         title="Review candidates"
         lede="Every candidate arrives with the row it was written for, the result of each check, and the passages it was grounded in."
         actions={

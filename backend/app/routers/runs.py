@@ -4,11 +4,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import require_role
+from ..auth import current_user
 from ..db import get_db
-from ..models import Blueprint, CandidateQuestion, ComplianceReport, GenerationRun, NoveltyReport
+from ..models import CandidateQuestion, ComplianceReport, GenerationRun, NoveltyReport, User
+from ..scoping import COORDINATOR, REVIEWER, require_blueprint, require_candidate, require_run
 from ..schemas import (
-    CandidateOut, CheckOut, CitationOut, ComplianceOut, ConstraintOut, EvidenceOut, NoveltyOut,
+    CandidateOut, CheckOut, CitationOut, ComplianceOut, ConstraintOut, EvidenceOut, GenerateIn, NoveltyOut,
     NoveltySignalOut, PYQOut, ReviewOut, RunOut, UserOut, ViolationOut,
 )
 from ..services import compliance, orchestrator, ranker
@@ -20,6 +21,7 @@ def run_out(run: GenerationRun) -> RunOut:
     return RunOut(
         run_id=run.run_id, blueprint_id=run.blueprint_id, backend_id=run.backend_id, prompt_hash=run.prompt_hash,
         temperature=run.temperature, seed=run.seed, started_at=run.started_at, status=run.status, error=run.error,
+        suggestion=run.suggestion,
         candidate_count=len(run.candidates), constraint_count=len(run.blueprint.constraints),
         arm_label=run.arm_label,
     )
@@ -75,48 +77,52 @@ def candidate_out(q: CandidateQuestion, reveal_arm: bool = True) -> CandidateOut
     )
 
 
-def get_run(db: Session, run_id: UUID) -> GenerationRun:
-    run = db.get(GenerationRun, run_id)
-    if run is None:
-        raise HTTPException(404, "run not found")
-    return run
+def get_run(db: Session, run_id: UUID, user: User, *roles: str) -> GenerationRun:
+    """Scoped lookup. Shared with the review router, which addresses runs the same way."""
+    return require_run(db, user, run_id, *roles)
 
 
-@router.post("/blueprints/{blueprint_id}/generate", response_model=RunOut, status_code=202,
-             dependencies=[Depends(require_role("reviewer", "coordinator"))])
-def generate(blueprint_id: UUID, background: BackgroundTasks, db: Session = Depends(get_db)):
-    bp = db.get(Blueprint, blueprint_id)
-    if bp is None:
-        raise HTTPException(404, "blueprint not found")
+@router.post("/blueprints/{blueprint_id}/generate", response_model=RunOut, status_code=202)
+def generate(blueprint_id: UUID, background: BackgroundTasks, body: GenerateIn | None = None,
+             db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """`suggestion` is optional and free text: what this reviewer is after, in their own words.
+
+    It cannot loosen the blueprint — compliance still judges the draft against the constraint
+    row — and it is recorded on the run, both so the run is reproducible and so hinted runs can
+    be kept out of the evaluation, where a hint is a confound (plan.md §14.4)."""
+    bp = require_blueprint(db, user, blueprint_id, REVIEWER, COORDINATOR)
     if bp.frozen_at is None:
         raise HTTPException(409, "blueprint must be frozen before generation")
-    run = orchestrator.start_run(db, bp)
+    run = orchestrator.start_run(db, bp, suggestion=body.suggestion if body else None)
     background.add_task(orchestrator.execute_run, run.run_id)
     return run_out(run)
 
 
 @router.get("/blueprints/{blueprint_id}/runs", response_model=list[RunOut])
-def list_runs(blueprint_id: UUID, db: Session = Depends(get_db)):
+def list_runs(blueprint_id: UUID, db: Session = Depends(get_db),
+              user: User = Depends(current_user)):
+    require_blueprint(db, user, blueprint_id)
     runs = db.scalars(select(GenerationRun).where(GenerationRun.blueprint_id == blueprint_id).order_by(GenerationRun.started_at.desc())).all()
     return [run_out(r) for r in runs]
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)
-def get_run_status(run_id: UUID, db: Session = Depends(get_db)):
-    return run_out(get_run(db, run_id))
+def get_run_status(run_id: UUID, db: Session = Depends(get_db),
+                   user: User = Depends(current_user)):
+    return run_out(get_run(db, run_id, user))
 
 
 @router.get("/runs/{run_id}/candidates", response_model=list[CandidateOut])
-def list_candidates(run_id: UUID, db: Session = Depends(get_db)):
+def list_candidates(run_id: UUID, db: Session = Depends(get_db),
+                    user: User = Depends(current_user)):
     """Ranked by the reviewer-adapted ranker when one is fitted; otherwise blueprint order with
     the candidates that survived both audits first."""
-    run = get_run(db, run_id)
-    return [candidate_out(q) for q in ranker.order(list(run.candidates))]
+    run = get_run(db, run_id, user)
+    return [candidate_out(q) for q in ranker.order(list(run.candidates), run.blueprint.course_id)]
 
 
 @router.get("/candidates/{question_id}/evidence", response_model=EvidenceOut)
-def evidence(question_id: UUID, db: Session = Depends(get_db)):
-    q = db.get(CandidateQuestion, question_id)
-    if q is None:
-        raise HTTPException(404, "candidate not found")
+def evidence(question_id: UUID, db: Session = Depends(get_db),
+             user: User = Depends(current_user)):
+    q = require_candidate(db, user, question_id)
     return EvidenceOut(question_id=q.question_id, citations=citations_out(q), reports=[compliance_out(r) for r in q.reports])

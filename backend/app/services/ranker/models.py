@@ -102,8 +102,21 @@ class BoostedRanker:
         return cls(booster_text=d["booster"], params=d.get("params", {}))
 
 
+class FeatureSetMismatch(RuntimeError):
+    """A stored ranker was fitted on a feature list this build no longer has."""
+
+
 def load(path: Path) -> Scorer:
     d = json.loads(path.read_text(encoding="utf-8"))
+    # A fitted ranker is a vector of weights in the order it was trained on. Change the feature
+    # list and every weight lands on the wrong feature, which still produces a number and still
+    # orders candidates — it just orders them by nothing. Refuse rather than score.
+    stored = d.get("feature_names")
+    if stored is not None and list(stored) != list(FEATURE_NAMES):
+        raise FeatureSetMismatch(
+            f"the ranker at {path} was fitted on {len(stored)} features and this build has "
+            f"{len(FEATURE_NAMES)}; refit it before it can be used again"
+        )
     algorithm = d["algorithm"]
     if algorithm == LIGHTGBM:
         return BoostedRanker.from_dict(d)

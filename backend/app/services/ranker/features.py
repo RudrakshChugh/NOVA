@@ -8,7 +8,6 @@ reason — may appear. The list is explicit rather than generated so a reader ca
 from dataclasses import dataclass
 
 BLOOM_ORDER = ("remember", "understand", "apply", "analyze", "evaluate", "create")
-DIFFICULTY_ORDER = ("easy", "medium", "hard")
 QUESTION_TYPES = ("mcq", "short_answer", "long_answer", "numerical")
 
 FEATURE_NAMES = (
@@ -31,7 +30,6 @@ FEATURE_NAMES = (
     # the constraint it was written for
     "bloom_rank",
     "marks",
-    "difficulty_rank",
     *(f"type_{t}" for t in QUESTION_TYPES),
     # the question itself
     "stem_words",
@@ -92,9 +90,6 @@ def extract(candidate) -> dict[str, float]:
         "mean_support": (sum(supports) / len(supports)) if supports else 0.0,
         "bloom_rank": float(BLOOM_ORDER.index(constraint.bloom_level)) if constraint.bloom_level in BLOOM_ORDER else 0.0,
         "marks": float(constraint.marks),
-        "difficulty_rank": float(DIFFICULTY_ORDER.index(constraint.target_difficulty))
-        if constraint.target_difficulty in DIFFICULTY_ORDER
-        else 0.0,
         "stem_words": float(len(candidate.stem.split())),
         "answer_words": float(len(candidate.answer_key.split())),
         "has_options": float(bool(candidate.options)),

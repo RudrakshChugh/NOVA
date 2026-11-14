@@ -75,8 +75,10 @@ export default function Engines({ course, user }) {
 
   const refresh = useCallback(async () => {
     const [ps, pr, m, rk] = await Promise.all([
-      api(`/courses/${course.course_id}/pyq-papers`), api('/novelty/pairs'),
-      api('/novelty/model'), api('/ranker/model'),
+      api(`/courses/${course.course_id}/pyq-papers`),
+      api(`/courses/${course.course_id}/novelty/pairs`),
+      api(`/courses/${course.course_id}/novelty/model`),
+      api(`/courses/${course.course_id}/ranker/model`),
     ])
     setPapers(ps); setPairs(pr); setModel(m); setRanker(rk)
   }, [course.course_id])
@@ -98,7 +100,7 @@ export default function Engines({ course, user }) {
   })
 
   const exportSplit = run('export', async () => {
-    const r = await api('/novelty/pairs/export', { method: 'POST' })
+    const r = await api(`/courses/${course.course_id}/novelty/pairs/export`, { method: 'POST' })
     toast('ok', 'Split manifest written', `${r.pairs} pairs → ${r.path}`)
   })
 
@@ -124,7 +126,7 @@ export default function Engines({ course, user }) {
   })
 
   const corpus = papers.reduce((n, p) => n + p.question_count, 0)
-  const isCoordinator = user.role === 'coordinator'
+  const isCoordinator = course.your_role === 'coordinator'
   const fitted = model?.is_fitted
   const total = pairs?.total ?? 0
   const accesses = model?.test_evaluations?.length ?? 0

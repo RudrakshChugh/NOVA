@@ -7,10 +7,11 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..auth import current_user, require_role
+from ..auth import current_user
 from ..db import get_db
-from ..models import Blueprint, CandidateQuestion, User
+from ..models import User
 from ..schemas import CandidateOut, StudyLaunchIn
+from ..scoping import COORDINATOR, REVIEWER, require_blueprint, require_candidate
 from ..services import orchestrator
 from ..services.evaluation import harness, report
 from ..services.evaluation.arms import ARMS
@@ -33,14 +34,11 @@ def list_arms():
     }
 
 
-@router.post("/blueprints/{blueprint_id}/study", status_code=202,
-             dependencies=[Depends(require_role("coordinator"))])
+@router.post("/blueprints/{blueprint_id}/study", status_code=202)
 def launch_study(blueprint_id: UUID, body: StudyLaunchIn, background: BackgroundTasks,
-                 db: Session = Depends(get_db)):
+                 db: Session = Depends(get_db), user: User = Depends(current_user)):
     """Run every named arm once per seed against the same frozen blueprint."""
-    bp = db.get(Blueprint, blueprint_id)
-    if bp is None:
-        raise HTTPException(404, "blueprint not found")
+    bp = require_blueprint(db, user, blueprint_id, COORDINATOR)
     try:
         planned = harness.launch(db, bp, body.arms, body.seeds)
     except ValueError as e:
@@ -58,12 +56,14 @@ def launch_study(blueprint_id: UUID, body: StudyLaunchIn, background: Background
 
 
 @router.get("/blueprints/{blueprint_id}/study")
-def study_status(blueprint_id: UUID, db: Session = Depends(get_db)):
+def study_status(blueprint_id: UUID, db: Session = Depends(get_db),
+                 user: User = Depends(current_user)):
+    require_blueprint(db, user, blueprint_id)
     return harness.status(db, blueprint_id)
 
 
 @router.get("/blueprints/{blueprint_id}/queue", response_model=list[CandidateOut])
-def blinded_queue(blueprint_id: UUID, user: User = Depends(require_role("reviewer")),
+def blinded_queue(blueprint_id: UUID, user: User = Depends(current_user),
                   db: Session = Depends(get_db)):
     """Every candidate of the study this reviewer has not yet judged, shuffled and unlabelled.
 
@@ -76,6 +76,7 @@ def blinded_queue(blueprint_id: UUID, user: User = Depends(require_role("reviewe
     seeded by reviewer and blueprint so a reload keeps the same order rather than re-randomising
     half-way through a sitting.
     """
+    require_blueprint(db, user, blueprint_id, REVIEWER)
     candidates = [c for run in harness.study_runs(db, blueprint_id) for c in run.candidates]
     pending = [
         c for c in candidates
@@ -86,18 +87,16 @@ def blinded_queue(blueprint_id: UUID, user: User = Depends(require_role("reviewe
 
 
 @router.get("/blueprints/{blueprint_id}/report")
-def evaluation_report(blueprint_id: UUID, db: Session = Depends(get_db)):
+def evaluation_report(blueprint_id: UUID, db: Session = Depends(get_db),
+                      user: User = Depends(current_user)):
     """Every metric of plan §3.3.6 for this study, each with its interval."""
-    if db.get(Blueprint, blueprint_id) is None:
-        raise HTTPException(404, "blueprint not found")
+    require_blueprint(db, user, blueprint_id)
     return report.build(db, blueprint_id)
 
 
 @router.get("/candidates/{question_id}/arm")
-def reveal_arm(question_id: UUID, _: User = Depends(require_role("coordinator")),
+def reveal_arm(question_id: UUID, user: User = Depends(current_user),
                db: Session = Depends(get_db)):
     """Which arm produced a question. Coordinator-only, so the label stays out of review."""
-    candidate = db.get(CandidateQuestion, question_id)
-    if candidate is None:
-        raise HTTPException(404, "candidate not found")
+    candidate = require_candidate(db, user, question_id, COORDINATOR)
     return {"question_id": str(question_id), "arm_label": candidate.arm_label}

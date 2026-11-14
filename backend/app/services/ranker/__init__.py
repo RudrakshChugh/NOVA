@@ -6,28 +6,39 @@ into the generation prompt, and the ranker runs after both audits, on their outp
 """
 
 from pathlib import Path
+from uuid import UUID
 
 from ...config import settings
-from .models import Scorer, load
+from .models import FeatureSetMismatch, Scorer, load
 
 
-def active_ranker_path() -> Path:
-    return settings.ranker_model_path
+def active_ranker_path(course_id: UUID) -> Path:
+    """One fitted ranker per subject: it is fitted on that subject’s reviewers and their
+    decisions, which is exactly what makes it reviewer-adapted."""
+    base = settings.ranker_model_path
+    return base.with_name(f"{base.stem}_{course_id}{base.suffix}")
 
 
-def load_active() -> Scorer | None:
-    """The fitted ranker, or None when none has been fitted yet."""
-    path = active_ranker_path()
-    return load(path) if path.exists() else None
+def load_active(course_id: UUID) -> Scorer | None:
+    """The fitted ranker, or None when none has been fitted yet — or when the one on disk was
+    fitted on a feature list this build no longer has. Ordering then falls back to blueprint
+    position, and the ranker model card says why, rather than a stale model quietly scoring."""
+    path = active_ranker_path(course_id)
+    if not path.exists():
+        return None
+    try:
+        return load(path)
+    except FeatureSetMismatch:
+        return None
 
 
-def order(candidates: list) -> list:
+def order(candidates: list, course_id: UUID) -> list:
     """Candidates best-first by predicted acceptance, falling back to blueprint order when no
     ranker is fitted. Candidates that failed an audit sort after those that passed either way,
     so a reviewer is never shown a known-bad question first."""
     from .features import extract
 
-    scorer = load_active()
+    scorer = load_active(course_id)
     if scorer is None:
         return sorted(candidates, key=lambda q: (q.constraint.position, q.state != "novel"))
     scored = [(q, scorer.score(extract(q))) for q in candidates]

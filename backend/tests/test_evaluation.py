@@ -14,7 +14,7 @@ from app.llm.base import GenerationResult
 from app.services.evaluation import arms as A
 from app.services.evaluation import harness
 
-from .conftest import first_passage_sentence, login, write_pdf
+from .conftest import first_passage_sentence, login, upload_material, write_pdf
 
 MATERIAL = (
     "A deadlock occurs when a set of processes each hold a resource and wait for another. "
@@ -27,9 +27,9 @@ MATERIAL = (
 )
 
 ROWS = [
-    ("CO1 Explain the conditions for deadlock", "mutual exclusion", "remember", 2, "short_answer", "easy"),
-    ("CO1 Explain the conditions for deadlock", "circular wait", "understand", 5, "short_answer", "easy"),
-    ("CO2 Apply deadlock prevention", "deadlock prevention", "apply", 5, "short_answer", "medium"),
+    ("CO1 Explain the conditions for deadlock", "mutual exclusion", "remember", 2, "short_answer"),
+    ("CO1 Explain the conditions for deadlock", "circular wait", "understand", 5, "short_answer"),
+    ("CO2 Apply deadlock prevention", "deadlock prevention", "apply", 5, "short_answer"),
 ]
 
 
@@ -74,16 +74,13 @@ def study(client, new_course, tmp_path_factory, request):
     course_id = new_course("EVAL101", "Evaluation Course")
 
     pdf = write_pdf(tmp_path_factory.mktemp("eval") / "unit.pdf", MATERIAL)
-    with pdf.open("rb") as f:
-        assert client.post(f"/courses/{course_id}/materials",
-                           files={"file": ("unit.pdf", f, "application/pdf")},
-                           headers=coordinator).status_code == 201
+    assert upload_material(client, course_id, pdf, coordinator)["state"] == "done"
 
     bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
     rows = [
         {"course_outcome": o, "concept": c, "bloom_level": b, "marks": m,
-         "question_type": t, "target_difficulty": d}
-        for o, c, b, m, t, d in ROWS
+         "question_type": t}
+        for o, c, b, m, t in ROWS
     ]
     client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
     frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()

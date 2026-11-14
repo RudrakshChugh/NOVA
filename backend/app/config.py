@@ -19,9 +19,8 @@ class Settings(BaseSettings):
     oidc_redirect_uri: str = "http://localhost:8000/auth/callback"
     dev_login: bool = True
 
-    # The single course this deployment serves (plan §2, §7 scope one course). Seeded at startup
-    # because there is no course-creation endpoint: without it a deployment with DEV_LOGIN off has
-    # no course at all and the interface has nothing to show.
+    # The first subject, seeded at startup so a fresh deployment is never an empty screen with
+    # no way forward. Further subjects are created in the app by an administrator (plan.md §14.1).
     course_code: str = "CS101"
     course_title: str = "Prototype Course"
 
@@ -29,7 +28,8 @@ class Settings(BaseSettings):
     # the domain is re-checked server-side on the claims that come back.
     allowed_domain: str | None = None  # e.g. thapar.edu
     allowed_emails: str = ""  # comma-separated exceptions to the domain rule
-    # Everyone else arrives as `pending` and is granted a role by a coordinator in the app.
+    # These addresses are admitted as platform administrators. Everyone else arrives as
+    # `pending`, is admitted by an administrator, and is then put on a subject by its coordinator.
     coordinator_emails: str = ""
 
     @property

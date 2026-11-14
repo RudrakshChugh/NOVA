@@ -23,6 +23,7 @@ from . import active_ranker_path
 from .features import decision_of, extract, session_of
 from .models import (
     COMPLIANCE_ONLY,
+    FeatureSetMismatch,
     LIGHTGBM,
     LOGISTIC_REGRESSION,
     ComplianceOnlyRanker,
@@ -31,6 +32,7 @@ from .models import (
     fit_linear,
     save,
 )
+from .models import load as load_scorer
 
 MIN_SESSIONS = 3
 MIN_EXAMPLES = 20
@@ -167,7 +169,14 @@ def train(db: Session, course_id: UUID) -> dict:
         }
 
     final = _fit_all(examples).get(chosen_name, ComplianceOnlyRanker())
-    version = (db.scalar(select(func.max(ModelVersion.version)).where(ModelVersion.kind == "ranker")) or 0) + 1
+    version = (
+        db.scalar(
+            select(func.max(ModelVersion.version)).where(
+                ModelVersion.kind == "ranker", ModelVersion.course_id == course_id
+            )
+        )
+        or 0
+    ) + 1
     metrics = {
         "cross_validation": comparison,
         "last_session_ndcg": held_out_metrics,
@@ -179,30 +188,46 @@ def train(db: Session, course_id: UUID) -> dict:
             "rule": "LightGBM ships only if its leave-one-session-out NDCG beats both floors",
         },
     }
-    save(final, active_ranker_path(), metrics, version)
+    save(final, active_ranker_path(course_id), metrics, version)
 
-    db.query(ModelVersion).filter_by(kind="ranker", is_active=True).update({"is_active": False})
+    db.query(ModelVersion).filter_by(
+        kind="ranker", course_id=course_id, is_active=True
+    ).update({"is_active": False})
     db.add(
         ModelVersion(
+            course_id=course_id,
             kind="ranker", algorithm=chosen_name, version=version,
             params=getattr(final, "params", {}), metrics=metrics,
-            artifact_path=str(active_ranker_path()), is_active=True,
+            artifact_path=str(active_ranker_path(course_id)), is_active=True,
         )
     )
     db.commit()
-    return {"trained": True, **model_card(db)}
+    return {"trained": True, **model_card(db, course_id)}
 
 
-def model_card(db: Session) -> dict:
-    row = db.scalar(select(ModelVersion).where(ModelVersion.kind == "ranker", ModelVersion.is_active))
+def model_card(db: Session, course_id: UUID) -> dict:
+    row = db.scalar(
+        select(ModelVersion).where(
+            ModelVersion.kind == "ranker", ModelVersion.course_id == course_id, ModelVersion.is_active
+        )
+    )
     if row is None:
         return {
             "is_fitted": False,
             "algorithm": None,
             "note": "No ranker has been fitted. Candidates are ordered by blueprint position, then by whether they survived both audits.",
         }
+    stale = None
+    path = active_ranker_path(course_id)
+    if path.exists():
+        try:
+            load_scorer(path)
+        except FeatureSetMismatch as e:
+            stale = str(e)
     return {
         "is_fitted": True,
+        "in_use": stale is None,
+        "stale": stale,
         "algorithm": row.algorithm,
         "version": row.version,
         "params": row.params,

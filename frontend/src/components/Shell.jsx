@@ -12,6 +12,7 @@ const WORKFLOW = [
   { key: 'generate', n: 3, label: 'Generate', icon: 'generate', title: 'Generate questions', who: 'Reviewer' },
   { key: 'review', n: 4, label: 'Review', icon: 'review', title: 'Review candidates', who: 'Reviewer' },
   { key: 'bank', n: 5, label: 'Question bank', icon: 'bank', title: 'Question bank', who: 'Everyone' },
+  { key: 'paper', n: 6, label: 'Paper', icon: 'file', title: 'Assemble the paper', who: 'Coordinator' },
 ]
 
 const ANALYSIS = [
@@ -29,9 +30,12 @@ function initials(name) {
   return name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()
 }
 
-export default function Shell({ user, course, step, progress, waiting = 0, go, onSignOut, children }) {
+export default function Shell({ user, course, courses = [], onPickCourse, step, progress, waiting = 0, go, onSignOut, children }) {
   const [open, setOpen] = useState(false)
   const current = ALL.find((s) => s.key === step)
+  // The likeliest mistake in a multi-subject build is doing something to the wrong subject,
+  // so the picker sits on every screen rather than on a settings page.
+  const canAdminister = user.role === 'admin' || course?.your_role === 'coordinator'
   const inWorkflow = WORKFLOW.some((s) => s.key === step)
   const visit = (key) => { setOpen(false); go(key) }
 
@@ -49,8 +53,22 @@ export default function Shell({ user, course, step, progress, waiting = 0, go, o
 
         {course && (
           <div className="course-chip">
-            <div className="code">{course.code}</div>
-            <div className="title" title={course.title}>{course.title}</div>
+            <div className="code">
+              {course.code}
+              {course.your_role && <span className="role">{course.your_role}</span>}
+            </div>
+            {courses.length > 1 ? (
+              <select
+                className="course-pick" value={course.course_id} aria-label="Subject"
+                onChange={(e) => onPickCourse(e.target.value)}
+              >
+                {courses.map((c) => (
+                  <option key={c.course_id} value={c.course_id}>{c.code} — {c.title}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="title" title={course.title}>{course.title}</div>
+            )}
           </div>
         )}
 
@@ -81,7 +99,7 @@ export default function Shell({ user, course, step, progress, waiting = 0, go, o
               </button>
             ))}
           </div>
-          {user.role === 'coordinator' && (
+          {canAdminister && (
             <div className="nav-group">
               <h4>Administration</h4>
               {ADMIN.map((s) => (
@@ -105,7 +123,7 @@ export default function Shell({ user, course, step, progress, waiting = 0, go, o
             <span className="avatar">{initials(user.name)}</span>
             <span className="who-text">
               <strong title={user.email}>{user.name}</strong>
-              <span>{user.role}</span>
+              <span>{user.role === 'admin' ? 'administrator' : course?.your_role || user.role}</span>
             </span>
           </div>
           <Btn variant="ghost" size="sm" icon="logout" onClick={onSignOut}>Sign out</Btn>

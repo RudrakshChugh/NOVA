@@ -6,29 +6,44 @@ import { pageLabel } from '../format'
 
 /* ─── course material ────────────────────────────────────────────────────────────────────── */
 
+
+const JOB_TONE = { done: 'ok', failed: 'bad', rejected: 'bad', duplicate: 'warn', running: 'brand', queued: '' }
+const JOB_LABEL = { done: 'indexed', failed: 'failed', rejected: 'not accepted', duplicate: 'already indexed', running: 'indexing', queued: 'queued' }
+
 function CourseMaterial({ course, canUpload }) {
   const [materials, setMaterials] = useState([])
   const [preview, setPreview] = useState({})
-  const [file, setFile] = useState(null)
+  const [files, setFiles] = useState([])
+  const [jobs, setJobs] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const toast = useToast()
 
   const load = () => api(`/courses/${course.course_id}/materials`).then(setMaterials)
-  useEffect(() => { load() }, [course.course_id]) // eslint-disable-line react-hooks/exhaustive-deps
+  const loadJobs = () => api(`/courses/${course.course_id}/ingestion-jobs`).then(setJobs)
+  useEffect(() => { load(); loadJobs() }, [course.course_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Indexing happens behind the response, so the queue is polled until nothing is moving.
+  const working = jobs.some((j) => j.state === 'queued' || j.state === 'running')
+  useEffect(() => {
+    if (!working) return
+    const t = setInterval(() => { loadJobs().catch(() => {}); load().catch(() => {}) }, 2500)
+    return () => clearInterval(t)
+  }, [working]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const upload = async (e) => {
     e.preventDefault()
-    if (!file) return
+    if (!files.length) return
     setBusy(true); setError('')
     const form = new FormData()
-    form.append('file', file)
+    files.forEach((f) => form.append('files', f))
     try {
-      const m = await api(`/courses/${course.course_id}/materials`, { method: 'POST', form })
-      setFile(null)
+      const queued = await api(`/courses/${course.course_id}/materials`, { method: 'POST', form })
+      setFiles([])
       e.target.reset()
-      await load()
-      toast('ok', `Indexed ${m.filename}`, `${m.chunk_count} passages across ${m.pages_covered}.`)
+      await loadJobs()
+      toast('info', `${queued.length} file${queued.length === 1 ? '' : 's'} queued`,
+        'Each is parsed, chunked and embedded in turn. You can leave this page.')
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
 
@@ -54,13 +69,33 @@ function CourseMaterial({ course, canUpload }) {
 
       {canUpload && (
         <form className="row" onSubmit={upload}>
-          <Field grow label="Add a PDF or Word file">
-            <input type="file" accept=".pdf,.docx" onChange={(e) => setFile(e.target.files[0] || null)} />
+          <Field grow label="Add PDF or Word files"
+                 hint="Several at once is fine. Each is indexed on its own, so one bad file does not lose the rest.">
+            <input type="file" accept=".pdf,.docx" multiple
+                   onChange={(e) => setFiles([...e.target.files])} />
           </Field>
-          <Btn variant="primary" icon="upload" busy={busy} disabled={!file}>
-            {busy ? 'Indexing…' : 'Upload & index'}
-          </Btn>
+          <div style={{ alignSelf: 'flex-end' }}>
+            <Btn variant="primary" icon="upload" busy={busy} disabled={!files.length}>
+              {files.length > 1 ? `Upload ${files.length} files` : 'Upload & index'}
+            </Btn>
+          </div>
         </form>
+      )}
+
+      {jobs.length > 0 && (
+        <Table head={['File', 'State', { label: 'Passages', num: true }, '']}>
+          {jobs.map((j) => (
+            <tr key={j.job_id}>
+              <td>{j.filename}</td>
+              <td>
+                <Badge tone={JOB_TONE[j.state]} dot>{JOB_LABEL[j.state] || j.state}</Badge>
+                {(j.state === 'queued' || j.state === 'running') && <span className="spinner" style={{ marginLeft: 8 }} />}
+              </td>
+              <td className="num">{j.state === 'done' ? j.chunk_count : '—'}</td>
+              <td className="muted prose">{j.detail}</td>
+            </tr>
+          ))}
+        </Table>
       )}
       {error && <Note tone="bad">{error}</Note>}
 
@@ -301,14 +336,146 @@ function PastPapers({ course, canUpload }) {
   )
 }
 
+
+/* ─── C. course outcomes ─────────────────────────────────────────────────────────────────── */
+
+function CourseOutcomes({ course, canUpload }) {
+  const [rows, setRows] = useState([])
+  const [draft, setDraft] = useState(null)   // what a syllabus appears to say, before saving
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const toast = useToast()
+
+  const load = () => api(`/courses/${course.course_id}/outcomes`).then(setRows)
+  useEffect(() => { load() }, [course.course_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const read = async (file) => {
+    if (!file) return
+    setBusy('read'); setError('')
+    const data = new FormData()
+    data.append('file', file)
+    try {
+      const r = await api(`/courses/${course.course_id}/syllabus`, { method: 'POST', form: data })
+      setDraft(r.outcomes.map((o) => ({ ...o })))
+      setNote(r.note)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const save = async (list, source) => {
+    setBusy('save'); setError('')
+    try {
+      const saved = await api(
+        `/courses/${course.course_id}/outcomes${source ? `?source_filename=${encodeURIComponent(source)}` : ''}`,
+        { method: 'PUT', body: list.map(({ code, text, confidence }) => ({ code, text, confidence })) },
+      )
+      setRows(saved)
+      setDraft(null)
+      toast('ok', `${saved.length} course outcome${saved.length === 1 ? '' : 's'} saved`,
+        'Blueprint rows now choose from this list instead of repeating it by hand.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const editing = draft || rows
+  const setField = (i, key, value) => {
+    const next = editing.map((r, j) => (j === i ? { ...r, [key]: value } : r))
+    (draft ? setDraft : setRows)(next)
+  }
+  const removeRow = (i) => {
+    const next = editing.filter((_, j) => j !== i)
+    (draft ? setDraft : setRows)(next)
+  }
+  const addRow = () => {
+    const next = [...editing, { code: `CO${editing.length + 1}`, text: '', confidence: null }]
+    (draft ? setDraft : setRows)(next)
+  }
+
+  const unsure = editing.filter((r) => r.confidence != null && r.confidence < 1).length
+
+  return (
+    <Card
+      step="C" title="Course outcomes"
+      hint="What a blueprint row points at. Extracted from the syllabus, checked by you, and editable afterwards — a syllabus gets revised."
+      actions={rows.length > 0 && !draft
+        ? <Badge tone="ok" dot>{rows.length} saved</Badge>
+        : <Badge tone="warn" dot>none saved</Badge>}
+    >
+      {canUpload && !draft && (
+        <Field
+          label="Read them from the syllabus"
+          hint="PDF or Word. Nothing is saved until you have looked at what was found."
+        >
+          <input type="file" accept=".pdf,.docx" disabled={busy === 'read'}
+                 onChange={(e) => read(e.target.files[0])} />
+        </Field>
+      )}
+
+      {busy === 'read' && <p className="muted"><span className="spinner" /> Reading the syllabus…</p>}
+      {draft && <Note tone={unsure ? 'warn' : 'ok'}>{note}</Note>}
+      {error && <Note tone="bad">{error}</Note>}
+
+      {editing.length === 0 ? (
+        <Empty icon="file" title="No course outcomes yet">
+          Blueprint rows fall back to free text until these exist, and coverage cannot be counted.
+        </Empty>
+      ) : (
+        <Table head={[
+          { label: 'Code', width: 90 }, 'Outcome',
+          ...(canUpload ? [{ label: '', width: 48 }] : []),
+        ]}>
+          {editing.map((r, i) => (
+            <tr key={i}>
+              <td>
+                {canUpload
+                  ? <input type="text" style={{ width: 70 }} value={r.code}
+                           onChange={(e) => setField(i, 'code', e.target.value)} />
+                  : <strong>{r.code}</strong>}
+                {r.confidence != null && r.confidence < 1 && (
+                  <div><Badge tone="warn">check</Badge></div>
+                )}
+              </td>
+              <td>
+                {canUpload
+                  ? <input type="text" style={{ width: '100%' }} value={r.text}
+                           placeholder="Explain …" onChange={(e) => setField(i, 'text', e.target.value)} />
+                  : r.text}
+              </td>
+              {canUpload && (
+                <td>
+                  <Btn variant="ghost" size="sm" icon="trash" aria-label={`Remove ${r.code}`}
+                       onClick={() => removeRow(i)} />
+                </td>
+              )}
+            </tr>
+          ))}
+        </Table>
+      )}
+
+      {canUpload && (
+        <div className="row">
+          <Btn icon="plus" onClick={addRow}>Add an outcome</Btn>
+          <Btn
+            variant="primary" icon="check" busy={busy === 'save'}
+            disabled={editing.some((r) => !r.code.trim() || !r.text.trim())}
+            onClick={() => save(editing, draft ? note.split(' from ')[1]?.split('.')[0] : null)}
+          >
+            {draft ? 'Save these outcomes' : 'Save changes'}
+          </Btn>
+          {draft && <Btn variant="ghost" onClick={() => { setDraft(null); setNote('') }}>Discard</Btn>}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 /* ─── page ───────────────────────────────────────────────────────────────────────────────── */
 
 export default function Materials({ course, user, go }) {
-  const canUpload = user.role === 'coordinator'
+  const canUpload = course.your_role === 'coordinator'
   return (
     <>
       <PageHead
-        eyebrow="Step 1 of 5"
+        eyebrow="Step 1 of 6"
         title="Upload the sources"
         lede="Two kinds of source, with two different jobs: the course material questions are written from, and the past papers they are checked against."
         actions={<Btn variant="primary" icon="arrowRight" onClick={() => go('blueprints')}>Next: blueprint</Btn>}
@@ -326,6 +493,11 @@ export default function Materials({ course, user, go }) {
           those alongside the wording. Papers whose layout defeats the splitter can be pasted as
           text instead, and the extraction is shown back for checking either way.
         </p>
+        <p>
+          <strong>Course outcomes</strong> are read off the syllabus once and then belong to the
+          subject. Every blueprint row points at one of them, so the same outcome cannot be spelt
+          three ways across one paper and the coverage figure means something.
+        </p>
       </Explainer>
 
       {!canUpload && (
@@ -336,6 +508,7 @@ export default function Materials({ course, user, go }) {
 
       <CourseMaterial course={course} canUpload={canUpload} />
       <PastPapers course={course} canUpload={canUpload} />
+      <CourseOutcomes course={course} canUpload={canUpload} />
     </>
   )
 }

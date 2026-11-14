@@ -297,7 +297,7 @@ export default function Candidate({ q, canReview, onReviewed, blinded = false, s
           <span className="muted">·</span>
           <span className="muted">{c.concept}</span>
           <span className="muted">·</span>
-          <span className="muted cap">{c.bloom_level}, {c.marks} mark{c.marks === 1 ? '' : 's'}, {c.question_type.replace('_', ' ')}, {c.target_difficulty}</span>
+          <span className="muted cap">{c.bloom_level}, {c.marks} mark{c.marks === 1 ? '' : 's'}, {c.question_type.replace('_', ' ')}</span>
         </div>
 
         {body}

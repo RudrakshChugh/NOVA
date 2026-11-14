@@ -24,11 +24,11 @@ services:
         sync: false
       - key: ALLOWED_DOMAIN
         value: thapar.edu
-      - key: COORDINATOR_EMAILS    # your institute address
+      - key: COORDINATOR_EMAILS    # admitted as platform administrators on first sign-in
         sync: false
       - key: DEV_LOGIN
         value: "false"
-      - key: COURSE_CODE        # the course this deployment serves
+      - key: COURSE_CODE        # the first subject; more are created in the app
         sync: false
       - key: COURSE_TITLE
         sync: false

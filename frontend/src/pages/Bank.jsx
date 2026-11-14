@@ -84,7 +84,7 @@ export default function Bank({ go }) {
   return (
     <>
       <PageHead
-        eyebrow="Step 5 of 5"
+        eyebrow="Step 5 of 6"
         title="Question bank"
         lede="Published questions, each with a version number and the complete record of where it came from."
       />

@@ -12,7 +12,7 @@ from app.services import novelty as novelty_engine
 from app.services.novelty import dataset
 from app.services.novelty.combiner import NoveltyCombiner
 
-from .conftest import first_passage_sentence, login, write_pdf
+from .conftest import first_passage_sentence, login, upload_material, write_pdf
 
 MATERIAL = (
     "A data flow diagram shows how data moves through a system. "
@@ -98,17 +98,14 @@ def course(client, new_course, tmp_path_factory):
     course_id = new_course("NOV101", "Novelty Engine Course")
 
     pdf = write_pdf(tmp_path_factory.mktemp("nov") / "unit.pdf", MATERIAL)
-    with pdf.open("rb") as f:
-        r = client.post(f"/courses/{course_id}/materials", files={"file": ("unit.pdf", f, "application/pdf")},
-                        headers=coordinator)
-    assert r.status_code == 201, r.text
+    assert upload_material(client, course_id, pdf, coordinator)["state"] == "done"
 
     bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
     rows = [{
         "course_outcome": "CO1 Explain data flow diagram notation and decomposition",
         "concept": "balancing and context diagrams",
         "bloom_level": "understand", "marks": 5,
-        "question_type": "short_answer", "target_difficulty": "easy",
+        "question_type": "short_answer",
     }]
     client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
     frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
@@ -154,11 +151,11 @@ def test_pair_set_is_built_stratified_and_split(client, course):
     assert "hard" in both_strata  # the paraphrase/renumber cases plan §5 requires
 
     # rebuilding is idempotent: no pair is duplicated and no fold is reassigned
-    before = client.get("/novelty/pairs").json()
+    before = client.get(f"/courses/{course['course_id']}/novelty/pairs").json()
     again = client.post(f"/courses/{course['course_id']}/novelty/pairs", json=body,
                         headers=course["coordinator"]).json()
     assert again["added"] == 0
-    assert client.get("/novelty/pairs").json()["composition"] == before["composition"]
+    assert client.get(f"/courses/{course['course_id']}/novelty/pairs").json()["composition"] == before["composition"]
 
 
 def test_split_manifest_records_the_seed_and_every_fold(client, course, tmp_path):
@@ -168,7 +165,7 @@ def test_split_manifest_records_the_seed_and_every_fold(client, course, tmp_path
 
     path = tmp_path / "novelty_split.json"
     with SessionLocal() as db:
-        result = export_split_manifest(db, path)
+        result = export_split_manifest(db, course["course_id"], path)
     manifest = json.loads(path.read_text(encoding="utf-8"))
 
     assert manifest["seed"] == dataset.SPLIT_SEED
@@ -212,14 +209,14 @@ def test_combiner_trains_on_train_and_val_only_and_reports_weights(client, cours
     assert set(card["coefficients"]) == {"semantic", "lexical", "structural", "numerical"}
     assert card["params"]["selected_on"] == "validation fold"
     assert card["test_evaluations"] == []  # training never touches the test fold
-    assert novelty_engine.active_combiner_path().exists()
+    assert novelty_engine.active_combiner_path(course["course_id"]).exists()
 
-    live = client.get("/novelty/model").json()
+    live = client.get(f"/courses/{course['course_id']}/novelty/model").json()
     assert live["version"] == card["version"] and live["threshold"] == card["threshold"]
 
 
 def test_test_fold_evaluation_is_separate_and_counts_its_accesses(client, course):
-    if not novelty_engine.active_combiner_path().exists():
+    if not novelty_engine.active_combiner_path(course["course_id"]).exists():
         pytest.skip("combiner not fitted")
     r = client.post(f"/courses/{course['course_id']}/novelty/evaluate-test", headers=course["coordinator"])
     assert r.status_code == 200, r.text
@@ -243,7 +240,7 @@ def test_test_fold_evaluation_is_separate_and_counts_its_accesses(client, course
 def untrained_combiner(monkeypatch):
     """Pin the documented fallback — equal-weight mean, threshold 0.85 — so these tests assert the
     redraft mechanism rather than the fit of a combiner trained on a twelve-question corpus."""
-    monkeypatch.setattr(novelty_engine, "load_combiner", NoveltyCombiner.untrained)
+    monkeypatch.setattr(novelty_engine, "load_combiner", lambda _course_id: NoveltyCombiner.untrained())
 
 
 def test_generation_catches_a_duplicate_and_redrafts(client, course, monkeypatch, untrained_combiner):

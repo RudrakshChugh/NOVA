@@ -19,15 +19,20 @@ from ..embeddings import embed
 from .combiner import NoveltyCombiner
 from .signals import SIGNAL_NAMES, BM25Index, Metadata, signal_vector
 
-def active_combiner_path() -> Path:
-    """Where the fitted combiner lives. Read through settings so a test run cannot overwrite the
+def active_combiner_path(course_id: UUID) -> Path:
+    """Where one subject’s fitted combiner lives.
+
+    One file per subject, because a combiner is fitted on that subject’s past-year corpus and
+    says nothing about another’s. Read through settings so a test run cannot overwrite the
     model the application is serving."""
-    return settings.novelty_model_path
+    base = settings.novelty_model_path
+    return base.with_name(f"{base.stem}_{course_id}{base.suffix}")
 
 
-def load_combiner() -> NoveltyCombiner:
-    """The fitted combiner if one has been trained, else the labelled untrained fallback."""
-    path = active_combiner_path()
+def load_combiner(course_id: UUID) -> NoveltyCombiner:
+    """The fitted combiner if one has been trained for this subject, else the labelled
+    untrained fallback."""
+    path = active_combiner_path(course_id)
     return NoveltyCombiner.load(path) if path.exists() else NoveltyCombiner.untrained()
 
 
@@ -51,7 +56,7 @@ def build_corpus(db: Session, course_id: UUID) -> Corpus:
         ).all()
     )
     index = BM25Index({str(q.pyq_id): q.text for q in questions})
-    return Corpus(questions=questions, index=index, combiner=load_combiner())
+    return Corpus(questions=questions, index=index, combiner=load_combiner(course_id))
 
 
 def _metadata_of(pyq: PYQ) -> Metadata:

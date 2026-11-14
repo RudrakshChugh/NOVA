@@ -14,6 +14,21 @@ export const hasToken = () => !!token
 
 export const loginUrl = () => `${API_BASE}/auth/login`
 
+export async function download(path, filename) {
+  // The API needs the bearer token, and an <a href> cannot carry one, so the bytes are
+  // fetched and handed to the browser as a blob.
+  const res = await fetch(`${API_BASE}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
+  const url = URL.createObjectURL(await res.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
 export async function api(path, { method = 'GET', body, form } = {}) {
   const headers = token ? { Authorization: `Bearer ${token}` } : {}
   if (body) headers['Content-Type'] = 'application/json'

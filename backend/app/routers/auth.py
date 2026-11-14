@@ -8,9 +8,10 @@ Google Workspace is an OIDC provider, so the authorisation-code flow below works
   * `email_verified` must be true, because an unverified address proves nothing;
   * the CSRF `state` is a signed, time-limited token this service issued, not an opaque value.
 
-A first-time sign-in creates the user with role `pending`, which satisfies no role check anywhere.
-Only an address on COORDINATOR_EMAILS is granted a role automatically; everyone else is granted one
-by a coordinator in the app.
+A first-time sign-in creates the user with role `pending`, which satisfies no check anywhere.
+Only an address on COORDINATOR_EMAILS is admitted automatically, as a platform administrator;
+everyone else is admitted by an administrator in the app and then put on a subject by that
+subject's coordinator (plan.md §14.1).
 """
 
 import secrets
@@ -24,7 +25,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import current_user, issue_token, require_role
+from ..auth import ADMIN, MEMBER, PENDING, current_user, issue_token, require_admin
 from ..config import settings
 from ..db import get_db
 from ..models import RoleChange, User
@@ -32,7 +33,8 @@ from ..schemas import DevLoginIn, PersonOut, RoleIn, TokenOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-ROLES = ("pending", "reviewer", "coordinator")
+# Platform standing. What somebody may do to a subject is a `course_members` row, not this.
+ROLES = (PENDING, MEMBER, ADMIN)
 STATE_MAX_AGE = 600  # ten minutes between leaving for Google and coming back
 _state_serializer = URLSafeTimedSerializer(settings.session_secret, salt="oauth-state")
 
@@ -88,14 +90,15 @@ def _provision(db: Session, info: dict) -> User:
     user = User(
         email=email,
         name=info.get("name") or email.split("@")[0],
-        role="coordinator" if listed else "pending",
+        role=ADMIN if listed else PENDING,
     )
     db.add(user)
     db.flush()
     db.add(RoleChange(
         user_id=user.user_id, actor_id=None, from_role=None, to_role=user.role,
-        reason=("first sign-in: address is listed in COORDINATOR_EMAILS" if listed
-                else "first sign-in: awaiting a role"),
+        reason=("first sign-in: address is listed in COORDINATOR_EMAILS, so it is admitted as "
+                "a platform administrator" if listed
+                else "first sign-in: awaiting admission"),
     ))
     db.commit()
     return user
@@ -181,9 +184,9 @@ def users(db: Session = Depends(get_db)):
 # --- role management ---
 
 
-@router.get("/people", response_model=list[PersonOut], dependencies=[Depends(require_role("coordinator"))])
+@router.get("/people", response_model=list[PersonOut], dependencies=[Depends(require_admin)])
 def people(db: Session = Depends(get_db)):
-    """Everyone who has signed in, with how each came to hold their role."""
+    """Everyone who has signed in, with how each came to hold their platform standing."""
     users = db.scalars(select(User).order_by(User.role, User.email)).all()
     actors = {u.user_id: u.name for u in users}
     out = []
@@ -201,23 +204,37 @@ def people(db: Session = Depends(get_db)):
     return out
 
 
+@router.get("/directory", response_model=list[UserOut])
+def directory(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    """Admitted accounts, for a coordinator choosing who to add to their subject.
+
+    Readable by any admitted account rather than by administrators alone: a coordinator cannot add
+    a reviewer they cannot name, and the alternative — typing an address and hoping — makes the
+    wrong person a reviewer on a typo. Pending accounts are left out, because admitting somebody is
+    an administrator's decision and this list must not become a way around it.
+    """
+    return db.scalars(
+        select(User).where(User.role != "pending").order_by(User.name)
+    ).all()
+
+
 @router.post("/people/{user_id}/role", response_model=UserOut)
 def set_role(user_id: str, body: RoleIn, db: Session = Depends(get_db),
-             actor: User = Depends(require_role("coordinator"))):
+             actor: User = Depends(require_admin)):
     if body.role not in ROLES:
         raise HTTPException(422, f"role must be one of {', '.join(ROLES)}")
     target = db.get(User, user_id)
     if target is None:
         raise HTTPException(404, "unknown user")
-    # Changing your own role is refused rather than guarded by a count: a coordinator who demotes
-    # themselves locks the deployment out of its only privileged screen, with no way back in.
+    # Changing your own standing is refused rather than guarded by a count: an administrator who
+    # demotes themselves locks the deployment out of its only privileged screen, with no way back.
     if target.user_id == actor.user_id:
         raise HTTPException(400, "you cannot change your own role")
     was = target.role
     target.role = body.role
     db.add(RoleChange(
         user_id=target.user_id, actor_id=actor.user_id, from_role=was, to_role=body.role,
-        reason="granted on the People screen",
+        reason="set on the People screen",
     ))
     db.commit()
     return target

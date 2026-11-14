@@ -18,8 +18,21 @@ from .combiner import NoveltyCombiner, evaluate, fit, single_signal_baseline
 SINGLE_SIGNAL_BASELINE_THRESHOLD = 0.80  # the "one embedding threshold" plan §3.1 must be beaten
 
 
-def _next_version(db: Session, kind: str) -> int:
-    return (db.scalar(select(func.max(ModelVersion.version)).where(ModelVersion.kind == kind)) or 0) + 1
+def _next_version(db: Session, kind: str, course_id: UUID) -> int:
+    latest = db.scalar(
+        select(func.max(ModelVersion.version)).where(
+            ModelVersion.kind == kind, ModelVersion.course_id == course_id
+        )
+    )
+    return (latest or 0) + 1
+
+
+def _active(db: Session, kind: str, course_id: UUID) -> ModelVersion | None:
+    return db.scalar(
+        select(ModelVersion).where(
+            ModelVersion.kind == kind, ModelVersion.course_id == course_id, ModelVersion.is_active
+        )
+    )
 
 
 def train(db: Session, course_id: UUID) -> dict:
@@ -32,33 +45,36 @@ def train(db: Session, course_id: UUID) -> dict:
             "reason": f"not enough labelled pairs (train={len(train_samples)}, validation={len(val_samples)})",
         }
 
-    version = _next_version(db, "novelty")
+    version = _next_version(db, "novelty", course_id)
     combiner = fit(train_samples, val_samples, version)
-    combiner.save(active_combiner_path())
+    combiner.save(active_combiner_path(course_id))
 
-    db.query(ModelVersion).filter_by(kind="novelty", is_active=True).update({"is_active": False})
+    db.query(ModelVersion).filter_by(
+        kind="novelty", course_id=course_id, is_active=True
+    ).update({"is_active": False})
     row = ModelVersion(
+        course_id=course_id,
         kind="novelty", algorithm="logistic_regression", version=version,
         params={**combiner.params, "coefficients": combiner.coefficients, "intercept": combiner.intercept,
                 "threshold": combiner.threshold},
         metrics={"validation": combiner.metrics, "test_evaluations": []},
-        artifact_path=str(active_combiner_path()), is_active=True,
+        artifact_path=str(active_combiner_path(course_id)), is_active=True,
     )
     db.add(row)
     db.commit()
-    return {"trained": True, **model_card(db)}
+    return {"trained": True, **model_card(db, course_id)}
 
 
 def evaluate_test(db: Session, course_id: UUID) -> dict:
     """Held-out performance of the active combiner, against the single-threshold baseline."""
-    row = db.scalar(select(ModelVersion).where(ModelVersion.kind == "novelty", ModelVersion.is_active))
-    if row is None or not active_combiner_path().exists():
+    row = _active(db, "novelty", course_id)
+    if row is None or not active_combiner_path(course_id).exists():
         return {"evaluated": False, "reason": "no fitted novelty combiner"}
     test_samples = dataset.samples(db, course_id, "test")
     if not test_samples:
         return {"evaluated": False, "reason": "test fold is empty"}
 
-    combiner = NoveltyCombiner.load(active_combiner_path())
+    combiner = NoveltyCombiner.load(active_combiner_path(course_id))
     result = {
         "model": evaluate(combiner, test_samples),
         "single_signal_baseline": single_signal_baseline(
@@ -84,11 +100,11 @@ def evaluate_test(db: Session, course_id: UUID) -> dict:
     }
 
 
-def model_card(db: Session) -> dict:
-    """What the active combiner is, in the terms plan §3.1 asks to be reportable."""
-    path = active_combiner_path()
+def model_card(db: Session, course_id: UUID) -> dict:
+    """What this subject’s active combiner is, in the terms plan §3.1 asks to be reportable."""
+    path = active_combiner_path(course_id)
     combiner = NoveltyCombiner.load(path) if path.exists() else NoveltyCombiner.untrained()
-    row = db.scalar(select(ModelVersion).where(ModelVersion.kind == "novelty", ModelVersion.is_active))
+    row = _active(db, "novelty", course_id)
     return {
         "version": combiner.version,
         "is_fitted": combiner.is_fitted,

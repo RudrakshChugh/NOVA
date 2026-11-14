@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,11 +21,11 @@ class User(Base):
     user_id: Mapped[uuid.UUID] = _uuid_pk()
     email: Mapped[str] = mapped_column(Text, unique=True)
     name: Mapped[str] = mapped_column(Text)
-    # pending | reviewer | coordinator. A user who signs in through the institutional provider but
-    # has not been granted a role lands on `pending`, which satisfies no role check anywhere: they
-    # are authenticated but cannot read material or record a decision. Review decisions are the
-    # ranker's training data and the input to the inter-rater statistic, so an unapproved account
-    # must not be able to produce any.
+    # Platform standing only: pending | member | admin (plan.md 14.1). What somebody may do to a
+    # subject lives in `course_members`, because the institute runs many subjects with a
+    # different coordinator for each. `pending` satisfies no check anywhere: the account is
+    # authenticated and nothing else. Review decisions are the ranker's training data and the
+    # input to the inter-rater statistic, so an unadmitted account must not produce any.
     role: Mapped[str] = mapped_column(Text, default="pending")
 
 
@@ -56,6 +56,52 @@ class Course(Base):
     title: Mapped[str] = mapped_column(Text)
 
 
+class CourseMember(Base):
+    """Who may do what on one subject.
+
+    Scoping is what makes a missing filter a disclosure between colleagues rather than a
+    cosmetic bug, so membership is a row that can be read, audited and revoked rather than a
+    value inferred from anywhere else.
+    """
+
+    __tablename__ = "course_members"
+    membership_id: Mapped[uuid.UUID] = _uuid_pk()
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.course_id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.user_id"))
+    role: Mapped[str] = mapped_column(Text)  # reviewer | coordinator
+    # Null when no person did it: the membership came from configuration or from the one-time
+    # translation of the platform-wide roles that preceded this table.
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.user_id"), nullable=True)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    reason: Mapped[str] = mapped_column(Text, default="")
+    __table_args__ = (UniqueConstraint("course_id", "user_id", name="uq_course_member"),)
+    course: Mapped["Course"] = relationship()
+    user: Mapped["User"] = relationship(foreign_keys=[user_id])
+
+
+class CourseOutcome(Base):
+    """One stated outcome of a subject (plan.md §14.6).
+
+    A row rather than free text on every constraint, so that the same outcome cannot be spelt
+    three ways in one blueprint and the coverage map validation returns means something.
+    """
+
+    __tablename__ = "course_outcomes"
+    outcome_id: Mapped[uuid.UUID] = _uuid_pk()
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.course_id"))
+    code: Mapped[str] = mapped_column(Text)  # CO1, CO2, ...
+    text: Mapped[str] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer)
+    # Where it came from, and how sure the extractor was. Kept after editing: a coordinator
+    # reading the list later should be able to see which rows were read off a document and
+    # which were typed.
+    source_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Material(Base):
     __tablename__ = "materials"
     material_id: Mapped[uuid.UUID] = _uuid_pk()
@@ -63,8 +109,35 @@ class Material(Base):
     filename: Mapped[str] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(Text)  # pdf | docx
     stored_path: Mapped[str] = mapped_column(Text)
+    # SHA-256 of the bytes. Re-uploading an overlapping folder is the normal case, not the
+    # exception, and embedding the same passages twice inflates the retrieval index with
+    # duplicates that then crowd out everything else. Nullable for rows stored before this.
+    content_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="material")
+
+
+class IngestionJob(Base):
+    """One file being parsed, chunked and embedded (plan.md §14.2).
+
+    Embedding is the slow step, the free tier has 512 MB, and a long synchronous request is
+    the thing a platform is most likely to cut off. So the upload returns as soon as the bytes
+    are safe and the work happens behind a row the screen can poll — which also means a
+    coordinator can close the tab on a folder of twelve lecture decks.
+    """
+
+    __tablename__ = "ingestion_jobs"
+    job_id: Mapped[uuid.UUID] = _uuid_pk()
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.course_id"))
+    material_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("materials.material_id"), nullable=True
+    )
+    filename: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(Text)  # queued | running | done | failed | duplicate | rejected
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Chunk(Base):
@@ -82,6 +155,13 @@ class Blueprint(Base):
     blueprint_id: Mapped[uuid.UUID] = _uuid_pk()
     course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.course_id"))
     version: Mapped[int | None] = mapped_column(Integer, nullable=True)  # assigned at freeze
+    # The frozen version this draft was copied from (plan.md §14.5). A frozen blueprint is
+    # never edited in place — runs, candidates and compliance reports all reference its
+    # constraint ids, and the evaluation claims rest on those still meaning what they meant at
+    # generation time — so revising one copies it and records the descent here.
+    revised_from: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("blueprints.blueprint_id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     frozen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     constraints: Mapped[list["BlueprintConstraint"]] = relationship(
@@ -95,11 +175,15 @@ class BlueprintConstraint(Base):
     blueprint_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("blueprints.blueprint_id"))
     position: Mapped[int] = mapped_column(Integer)
     course_outcome: Mapped[str] = mapped_column(Text)
+    # The outcome row this points at, once the subject has them. Nullable, because a blueprint
+    # written before the subject’s outcomes were extracted still has to load (plan.md §14.6).
+    outcome_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("course_outcomes.outcome_id"), nullable=True
+    )
     concept: Mapped[str] = mapped_column(Text)
     bloom_level: Mapped[str] = mapped_column(Text)
     marks: Mapped[int] = mapped_column(Integer)
     question_type: Mapped[str] = mapped_column(Text)
-    target_difficulty: Mapped[str] = mapped_column(Text)
     blueprint: Mapped[Blueprint] = relationship(back_populates="constraints")
 
 
@@ -109,6 +193,11 @@ class GenerationRun(Base):
     blueprint_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("blueprints.blueprint_id"))
     backend_id: Mapped[str] = mapped_column(Text)
     prompt_hash: Mapped[str] = mapped_column(Text)
+    # What the reviewer asked for in their own words, if anything (plan.md §14.4). It is part
+    # of prompt_hash, so two runs that differ only in this are not mistaken for the same
+    # configuration — and it is queried directly to keep hinted runs out of the evaluation,
+    # where a hint is a confound rather than a feature.
+    suggestion: Mapped[str | None] = mapped_column(Text, nullable=True)
     temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
     seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -199,6 +288,7 @@ class QuestionBankEntry(Base):
     version: Mapped[int] = mapped_column(Integer)
     snapshot: Mapped[dict] = mapped_column(JSONB)
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    question: Mapped["CandidateQuestion"] = relationship()
 
 
 # --- Novelty engine (plan §3.1): past-year corpus, audit reports, labelled pair set ---
@@ -271,6 +361,11 @@ class DuplicatePair(Base):
 
     __tablename__ = "duplicate_pairs"
     pair_id: Mapped[uuid.UUID] = _uuid_pk()
+    # The subject whose past-year corpus these two questions came from. Pairs are built from
+    # one subject and the combiner fitted on them is used on that subject, so mixing them
+    # would train one department’s duplicate detector on another’s papers. Nullable for rows
+    # written before subjects existed.
+    course_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("courses.course_id"), nullable=True)
     pair_key: Mapped[str] = mapped_column(Text, unique=True)  # stable hash of the two texts; split is keyed on this
     left_text: Mapped[str] = mapped_column(Text)
     right_text: Mapped[str] = mapped_column(Text)
@@ -289,6 +384,7 @@ class ModelVersion(Base):
 
     __tablename__ = "model_versions"
     model_id: Mapped[uuid.UUID] = _uuid_pk()
+    course_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("courses.course_id"), nullable=True)
     kind: Mapped[str] = mapped_column(Text)  # novelty | ranker
     algorithm: Mapped[str] = mapped_column(Text)  # logistic_regression | lightgbm | compliance_only
     version: Mapped[int] = mapped_column(Integer)
@@ -297,3 +393,66 @@ class ModelVersion(Base):
     artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     trained_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# --- Paper assembly (plan.md §14.3): published questions bound into a paper ---
+
+
+class PaperTemplate(Base):
+    """The institutional furniture of a paper's first page.
+
+    Kept per subject and reused, because it is the part nobody wants to retype and the part a
+    department is fussiest about.
+    """
+
+    __tablename__ = "paper_templates"
+    template_id: Mapped[uuid.UUID] = _uuid_pk()
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.course_id"), unique=True)
+    institution: Mapped[str] = mapped_column(Text, default="")
+    department: Mapped[str] = mapped_column(Text, default="")
+    exam_name: Mapped[str] = mapped_column(Text, default="")
+    duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Paper(Base):
+    """An ordered selection of published questions, bound into something printable.
+
+    A stored object rather than a view, because ordering and grouping are decisions somebody makes
+    and then wants back tomorrow. Finalising freezes a snapshot for the same reason a bank entry
+    carries one: a paper that was printed must stay reproducible after its questions are revised.
+    """
+
+    __tablename__ = "papers"
+    paper_id: Mapped[uuid.UUID] = _uuid_pk()
+    course_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("courses.course_id"))
+    blueprint_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("blueprints.blueprint_id"), nullable=True
+    )
+    title: Mapped[str] = mapped_column(Text)
+    exam_date: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(Text, default="draft")  # draft | final
+    snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finalised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    items: Mapped[list["PaperItem"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan", order_by="PaperItem.position"
+    )
+
+
+class PaperItem(Base):
+    """One question on the paper, at its number and sub-part."""
+
+    __tablename__ = "paper_items"
+    item_id: Mapped[uuid.UUID] = _uuid_pk()
+    paper_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("papers.paper_id"))
+    entry_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("question_bank.entry_id"))
+    position: Mapped[int] = mapped_column(Integer)
+    number: Mapped[int] = mapped_column(Integer)
+    part: Mapped[str | None] = mapped_column(Text, nullable=True)  # "a", "b", ... or null
+    marks: Mapped[int] = mapped_column(Integer)
+    paper: Mapped[Paper] = relationship(back_populates="items")
+    entry: Mapped["QuestionBankEntry"] = relationship()

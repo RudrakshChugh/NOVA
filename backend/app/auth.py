@@ -1,4 +1,5 @@
-"""Session tokens and role checks. Login itself lives in routers/auth.py."""
+"""Session tokens and platform-standing checks. Login itself lives in routers/auth.py, and what
+somebody may do to one subject lives in scoping.py."""
 
 from fastapi import Depends, Header, HTTPException
 from itsdangerous import BadSignature, URLSafeTimedSerializer
@@ -29,24 +30,26 @@ def current_user(authorization: str = Header(default=""), db: Session = Depends(
     return user
 
 
-PENDING = "pending"
-
-
-def require_role(*roles: str):
-    def dep(user: User = Depends(current_user)) -> User:
-        if user.role == PENDING:
-            # A distinct code so the interface can show "waiting for approval" rather than a flat
-            # permission error — the account is valid, it just has no role yet.
-            raise HTTPException(403, "account pending approval")
-        if user.role not in roles:
-            raise HTTPException(403, f"requires role {' or '.join(roles)}")
-        return user
-
-    return dep
+PENDING, MEMBER, ADMIN = "pending", "member", "admin"
 
 
 def require_active(user: User = Depends(current_user)) -> User:
-    """Any granted role. Used by the read-only endpoints that every signed-in member may see."""
+    """An admitted account. What it may do to a given subject is decided per subject, in
+    `scoping.py`; this only establishes that the account has been admitted at all."""
+    if user.role == PENDING:
+        # A distinct code so the interface can show "waiting for approval" rather than a flat
+        # permission error — the account is valid, it has simply not been admitted yet.
+        raise HTTPException(403, "account pending approval")
+    return user
+
+
+def require_admin(user: User = Depends(current_user)) -> User:
+    """Platform administration: creating subjects, and admitting or removing people.
+
+    Deliberately separate from being a coordinator. A coordinator runs one subject; an admin
+    decides who exists on the platform at all, which is a different and rarer act."""
     if user.role == PENDING:
         raise HTTPException(403, "account pending approval")
+    if user.role != ADMIN:
+        raise HTTPException(403, "requires a platform administrator")
     return user

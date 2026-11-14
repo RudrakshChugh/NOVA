@@ -19,7 +19,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Course  # noqa: E402
+from app.models import Course, CourseMember, User  # noqa: E402
+from app.scoping import COORDINATOR, REVIEWER  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -49,10 +51,26 @@ def client(tmp_path_factory):
 def new_course():
     """A course of this test's own, so one test module's corpus cannot change another's run."""
 
-    def make(code: str, title: str = "Isolated Course") -> str:
+    def make(code: str, title: str = "Isolated Course", members: bool = True) -> str:
         with SessionLocal() as db:
             course = Course(code=code, title=title)
             db.add(course)
+            db.flush()
+            # A subject created in the app is created by an administrator who names its
+            # people. `members=False` makes a subject the demo accounts are *not* in, which
+            # is what the cross-subject tests need.
+            if members:
+                for email, role in (
+                    ("coordinator@example.edu", COORDINATOR),
+                    ("reviewer1@example.edu", REVIEWER),
+                    ("reviewer2@example.edu", REVIEWER),
+                ):
+                    user = db.scalar(select(User).where(User.email == email))
+                    if user is not None:
+                        db.add(CourseMember(
+                            course_id=course.course_id, user_id=user.user_id, role=role,
+                            reason="test fixture",
+                        ))
             db.commit()
             return str(course.course_id)
 
@@ -70,6 +88,26 @@ def first_passage_sentence(user_prompt: str) -> str:
     passage = body.split("\n\n")[0].split(") ", 1)[1]
     head = passage.split(". ", 1)[0]
     return head if head == passage else f"{head}."
+
+
+def upload_material(client, course_id, path, headers, name=None):
+    """Upload one file and return its finished ingestion job.
+
+    Upload answers 202 with the file still queued; TestClient runs the background task before it
+    returns, so the job row is already final by the time this reads it back.
+    """
+    from pathlib import Path
+
+    path = Path(path)
+    with path.open("rb") as f:
+        r = client.post(
+            f"/courses/{course_id}/materials",
+            files={"files": (name or path.name, f, "application/pdf")}, headers=headers,
+        )
+    assert r.status_code == 202, r.text
+    job_id = r.json()[0]["job_id"]
+    jobs = client.get(f"/courses/{course_id}/ingestion-jobs", headers=headers).json()
+    return next(j for j in jobs if j["job_id"] == job_id)
 
 
 def write_pdf(path, text: str):

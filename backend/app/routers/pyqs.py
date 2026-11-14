@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..auth import require_role
+from ..auth import current_user
 from ..config import settings
 from ..db import get_db
-from ..models import PYQ, Course, DuplicatePair, NoveltyReport, PYQPaper
+from ..models import PYQ, DuplicatePair, NoveltyReport, PYQPaper, User
 from ..schemas import PYQOut, PYQPaperOut, PYQPasteIn
+from ..scoping import COORDINATOR, require_course, require_paper
 from ..services import pyq_ingestion
 
 router = APIRouter(tags=["pyqs"])
@@ -28,18 +29,10 @@ def _paper_out(db: Session, paper: PYQPaper) -> PYQPaperOut:
     )
 
 
-def _require_course(db: Session, course_id: UUID) -> Course:
-    course = db.get(Course, course_id)
-    if course is None:
-        raise HTTPException(404, "course not found")
-    return course
-
-
-@router.post("/courses/{course_id}/pyq-papers", response_model=PYQPaperOut, status_code=201,
-             dependencies=[Depends(require_role("coordinator"))])
+@router.post("/courses/{course_id}/pyq-papers", response_model=PYQPaperOut, status_code=201)
 def upload_paper(course_id: UUID, file: UploadFile, year: int = Form(...), label: str = Form(...),
-                 db: Session = Depends(get_db)):
-    _require_course(db, course_id)
+                 db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_course(db, user, course_id, COORDINATOR)
     ext = "." + (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in _SOURCE_TYPES:
         raise HTTPException(400, "only .pdf and .docx are accepted")
@@ -63,11 +56,11 @@ def upload_paper(course_id: UUID, file: UploadFile, year: int = Form(...), label
     return _paper_out(db, paper)
 
 
-@router.post("/courses/{course_id}/pyq-papers/text", response_model=PYQPaperOut, status_code=201,
-             dependencies=[Depends(require_role("coordinator"))])
-def paste_paper(course_id: UUID, body: PYQPasteIn, db: Session = Depends(get_db)):
+@router.post("/courses/{course_id}/pyq-papers/text", response_model=PYQPaperOut, status_code=201)
+def paste_paper(course_id: UUID, body: PYQPasteIn, db: Session = Depends(get_db),
+                user: User = Depends(current_user)):
     """For papers whose layout defeats the splitter: one question per blank-line-separated block."""
-    _require_course(db, course_id)
+    require_course(db, user, course_id, COORDINATOR)
     paper = PYQPaper(course_id=course_id, year=body.year, label=body.label, source_type="text")
     paper.detected_year = pyq_ingestion.detect_year(body.text)
     db.add(paper)
@@ -85,7 +78,9 @@ def paste_paper(course_id: UUID, body: PYQPasteIn, db: Session = Depends(get_db)
 
 
 @router.get("/courses/{course_id}/pyq-papers", response_model=list[PYQPaperOut])
-def list_papers(course_id: UUID, db: Session = Depends(get_db)):
+def list_papers(course_id: UUID, db: Session = Depends(get_db),
+                user: User = Depends(current_user)):
+    require_course(db, user, course_id)
     papers = db.scalars(
         select(PYQPaper).where(PYQPaper.course_id == course_id).order_by(PYQPaper.year.desc(), PYQPaper.label)
     ).all()
@@ -93,19 +88,18 @@ def list_papers(course_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.get("/pyq-papers/{paper_id}/questions", response_model=list[PYQOut])
-def list_questions(paper_id: UUID, db: Session = Depends(get_db)):
-    if db.get(PYQPaper, paper_id) is None:
-        raise HTTPException(404, "paper not found")
+def list_questions(paper_id: UUID, db: Session = Depends(get_db),
+                   user: User = Depends(current_user)):
+    require_paper(db, user, paper_id)
     return db.scalars(select(PYQ).where(PYQ.paper_id == paper_id).order_by(PYQ.number)).all()
 
 
-@router.delete("/pyq-papers/{paper_id}", status_code=204, dependencies=[Depends(require_role("coordinator"))])
-def delete_paper(paper_id: UUID, db: Session = Depends(get_db)):
+@router.delete("/pyq-papers/{paper_id}", status_code=204)
+def delete_paper(paper_id: UUID, db: Session = Depends(get_db),
+                 user: User = Depends(current_user)):
     """Removing a mis-extracted paper. Labelled pairs already built from it keep their text, so a
     fold assignment is never invalidated by a corpus correction."""
-    paper = db.get(PYQPaper, paper_id)
-    if paper is None:
-        raise HTTPException(404, "paper not found")
+    paper = require_paper(db, user, paper_id, COORDINATOR)
     ids = select(PYQ.pyq_id).where(PYQ.paper_id == paper_id)
     db.query(DuplicatePair).filter(DuplicatePair.left_pyq_id.in_(ids)).update(
         {"left_pyq_id": None}, synchronize_session=False

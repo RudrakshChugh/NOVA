@@ -8,8 +8,9 @@ Checks (one per blueprint field it can observe from the candidate text):
   concept        constraint concept content words appear in stem or answer
   course_outcome outcome content words appear in stem or answer
   grounding      at least one citation whose quote is verbatim in the cited chunk and clears the support floor
-target_difficulty has no deterministic rule on the candidate; it is checked for consistency
-with bloom_level at blueprint validation time instead (blueprints router).
+Every field of a constraint row is checked here. A field with no deterministic rule on the
+candidate text does not belong on the row at all, which is why target_difficulty was removed
+(plan.md 14.7) rather than being checked somewhere softer.
 """
 
 import re

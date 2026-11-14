@@ -3,10 +3,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..auth import require_role
+from ..auth import current_user
 from ..db import get_db
-from ..models import CandidateQuestion, ReviewRecord, User
+from ..models import ReviewRecord, User
 from ..schemas import CandidateOut, ReviewIn, ReviewSummaryOut
+from ..scoping import COORDINATOR, REVIEWER, require_candidate
 from ..services.review import normalised_edit_distance
 from .runs import candidate_out, get_run
 
@@ -17,11 +18,9 @@ _STATE_FOR = {"accept": "accepted", "edit": "edited", "reject": "rejected"}
 
 @router.post("/candidates/{question_id}/review", response_model=CandidateOut)
 def review(question_id: UUID, body: ReviewIn,
-           user: User = Depends(require_role("reviewer", "coordinator")),
+           user: User = Depends(current_user),
            db: Session = Depends(get_db)):
-    q = db.get(CandidateQuestion, question_id)
-    if q is None:
-        raise HTTPException(404, "candidate not found")
+    q = require_candidate(db, user, question_id, REVIEWER, COORDINATOR)
     if q.state in ("published", "superseded"):
         raise HTTPException(409, f"candidate is {q.state}")
     if q.run.status != "completed":
@@ -49,9 +48,10 @@ def review(question_id: UUID, body: ReviewIn,
 
 
 @router.get("/runs/{run_id}/reviews", response_model=ReviewSummaryOut)
-def review_summary(run_id: UUID, db: Session = Depends(get_db)):
+def review_summary(run_id: UUID, db: Session = Depends(get_db),
+                   user: User = Depends(current_user)):
     """Counts the latest review decision per candidate (publishing does not change the decision)."""
-    run = get_run(db, run_id)
+    run = get_run(db, run_id, user)
     counts = {"accept": 0, "edit": 0, "reject": 0}
     distances: list[float] = []
     for q in run.candidates:

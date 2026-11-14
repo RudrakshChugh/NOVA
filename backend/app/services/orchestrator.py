@@ -49,10 +49,9 @@ USER_TEMPLATE = """Blueprint constraint:
 - Bloom level: {bloom_level} (begin the question with a verb at this level)
 - marks: {marks}
 - question type: {question_type}
-- target difficulty: {target_difficulty}
 
 {type_rules}
-{repair_block}{novelty_block}
+{suggestion_block}{repair_block}{novelty_block}
 Course passages:
 {passages}
 
@@ -87,10 +86,14 @@ OUTPUT_SCHEMA = {
 }
 
 
-def prompt_hash() -> str:
-    """Fingerprint of every prompt template, so a run records exactly which prompts produced it."""
+def prompt_hash(suggestion: str | None = None) -> str:
+    """Fingerprint of every prompt template **and of the run’s suggestion**, so a run records
+    exactly which prompts produced it.
+
+    The suggestion is part of the prompt, so leaving it out would let two runs that asked the
+    model for different things share a hash and read as the same configuration."""
     joined = SYSTEM_PROMPT + UNGROUNDED_SYSTEM_PROMPT + USER_TEMPLATE + TOPIC_TEMPLATE
-    return hashlib.sha256(joined.encode()).hexdigest()
+    return hashlib.sha256(f"{joined}\n--suggestion--\n{suggestion or ''}".encode()).hexdigest()
 
 
 def _render_passages(passages: list[Chunk]) -> str:
@@ -103,6 +106,7 @@ def _build_user_prompt(
     violations: list[compliance.Violation],
     duplicate_of: str | None = None,
     arm: Arm | None = None,
+    suggestion: str | None = None,
 ) -> str:
     """The prompt for one draft. Which blocks appear is the arm's doing, so a baseline differs
     from the full system only in what it is told, not in which model or templates it uses."""
@@ -113,6 +117,16 @@ def _build_user_prompt(
             course_outcome=c.course_outcome, concept=c.concept, passages_block=block
         )
 
+    # Delimited and labelled as a preference, never as a rule. The blueprint row above is what
+    # the draft is judged against; a suggestion that contradicts it produces a violation rather
+    # than a quiet override, which is also what makes pasted text safe to put here.
+    suggestion_block = ""
+    if suggestion and suggestion.strip():
+        suggestion_block = (
+            "The reviewer has asked for this, in their own words. Follow it where it does not\n"
+            "conflict with the blueprint constraint above, which always wins:\n"
+            f"<<<\n{suggestion.strip()}\n>>>\n"
+        )
     repair_block = ""
     if violations:
         lines = "\n".join(f"- {v.field}: expected {v.expected}; previous draft had {v.observed}" for v in violations)
@@ -131,8 +145,8 @@ def _build_user_prompt(
         bloom_level=c.bloom_level,
         marks=c.marks,
         question_type=c.question_type,
-        target_difficulty=c.target_difficulty,
         type_rules=TYPE_RULES[c.question_type],
+        suggestion_block=suggestion_block,
         repair_block=repair_block,
         novelty_block=novelty_block,
         passages=_render_passages(passages),
@@ -227,7 +241,7 @@ def _generate_for_constraint(
         result = adapter.generate(
             GenerationRequest(
                 system=system,
-                user=_build_user_prompt(c, passages, violations, duplicate_of, arm),
+                user=_build_user_prompt(c, passages, violations, duplicate_of, arm, run.suggestion),
                 json_schema=OUTPUT_SCHEMA,
                 temperature=run.temperature,
                 seed=run.seed,
@@ -297,16 +311,19 @@ def execute_run(run_id: UUID) -> None:
 
 
 def start_run(
-    db: Session, bp: Blueprint, arm_label: str | None = None, seed: int | None = None
+    db: Session, bp: Blueprint, arm_label: str | None = None, seed: int | None = None,
+    suggestion: str | None = None,
 ) -> GenerationRun:
     """`arm_label` is null for normal use and names the baseline or ablation during an evaluation.
     `seed` is supplied by the evaluation harness so a condition can be repeated under different
     seeds (plan §3.3.3); otherwise one is drawn and recorded."""
+    suggestion = (suggestion or "").strip() or None
     run = GenerationRun(
-        blueprint_id=bp.blueprint_id, backend_id=get_adapter().backend_id, prompt_hash=prompt_hash(),
+        blueprint_id=bp.blueprint_id, backend_id=get_adapter().backend_id,
+        prompt_hash=prompt_hash(suggestion),
         status="running", temperature=settings.generation_temperature,
         seed=seed if seed is not None else random.SystemRandom().randrange(2**31),
-        arm_label=arm_label,
+        arm_label=arm_label, suggestion=suggestion,
     )
     db.add(run)
     db.commit()

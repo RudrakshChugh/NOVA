@@ -14,6 +14,7 @@ export default function Generate({ course, user, go }) {
   const [blueprints, setBlueprints] = useState([])
   const [selected, setSelected] = useState('')
   const [runs, setRuns] = useState([])
+  const [suggestion, setSuggestion] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const toast = useToast()
@@ -43,7 +44,7 @@ export default function Generate({ course, user, go }) {
   const start = async () => {
     setBusy(true); setError('')
     try {
-      await api(`/blueprints/${selected}/generate`, { method: 'POST' })
+      await api(`/blueprints/${selected}/generate`, { method: 'POST', body: { suggestion: suggestion.trim() || null } })
       await loadRuns()
       toast('info', 'Generation started', 'Each question is drafted, audited and repaired in turn — roughly a minute each on a local model.')
     } catch (e) { setError(e.message) } finally { setBusy(false) }
@@ -54,7 +55,7 @@ export default function Generate({ course, user, go }) {
   return (
     <>
       <PageHead
-        eyebrow="Step 3 of 5"
+        eyebrow="Step 3 of 6"
         title="Generate questions"
         lede="One candidate per blueprint row. Nothing reaches a reviewer until it has been through both audits."
       />
@@ -93,6 +94,17 @@ export default function Generate({ course, user, go }) {
                 </Btn>
               </div>
             </div>
+
+            <Field
+              label="Anything particular you are after? (optional)"
+              hint="In your own words. It is a preference, not a rule: the blueprint row still decides what counts as compliant, and a hinted run is excluded from evaluation studies."
+            >
+              <textarea
+                rows={2} value={suggestion} maxLength={1000}
+                placeholder="e.g. numerical, on asymptotic analysis — avoid code-reading questions"
+                onChange={(e) => setSuggestion(e.target.value)}
+              />
+            </Field>
 
             <div className="stats">
               {PIPELINE.map(([icon, k, v]) => (
@@ -148,6 +160,11 @@ export default function Generate({ course, user, go }) {
                 <td className="muted" style={{ fontSize: 12 }}>
                   temp {r.temperature ?? 'n/a'} · seed {r.seed ?? 'n/a'}<br />
                   <span className="mono">prompt {r.prompt_hash.slice(0, 8)}</span>
+                  {r.suggestion && (
+                    <div style={{ marginTop: 4 }} title={r.suggestion}>
+                      <Badge tone="warn">asked for: {r.suggestion.slice(0, 40)}{r.suggestion.length > 40 ? '…' : ''}</Badge>
+                    </div>
+                  )}
                 </td>
                 <td>
                   {r.status === 'completed' && (

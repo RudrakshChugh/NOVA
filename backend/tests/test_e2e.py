@@ -10,7 +10,7 @@ import pytest
 from app.llm.base import GenerationResult
 from app.services import orchestrator
 
-from .conftest import login, write_pdf
+from .conftest import login, upload_material, write_pdf
 
 PASSAGE = (
     "Congestion control in TCP limits the sending rate when the network is overloaded. "
@@ -59,28 +59,27 @@ def test_full_journey(client, stub, tmp_path):
 
     # 1-3. upload and ingest a real PDF
     pdf = write_pdf(tmp_path / "unit1.pdf", PASSAGE)
-    with pdf.open("rb") as f:
-        r = client.post(f"/courses/{course_id}/materials", files={"file": ("unit1.pdf", f, "application/pdf")}, headers=coordinator)
-    assert r.status_code == 201, r.text
-    assert r.json()["chunk_count"] >= 1 and r.json()["pages_covered"] == 1
-    assert client.get(f"/courses/{course_id}/materials").json()[0]["chunk_count"] == r.json()["chunk_count"]
+    job = upload_material(client, course_id, pdf, coordinator)
+    assert job["state"] == "done" and job["chunk_count"] >= 1
+    listed = client.get(f"/courses/{course_id}/materials").json()[0]
+    assert listed["chunk_count"] == job["chunk_count"] and listed["pages_covered"] == 1
 
     # reviewer cannot upload
     with pdf.open("rb") as f:
-        assert client.post(f"/courses/{course_id}/materials", files={"file": ("x.pdf", f)}, headers=reviewer).status_code == 403
+        assert client.post(f"/courses/{course_id}/materials", files={"files": ("x.pdf", f)}, headers=reviewer).status_code == 403
 
     # 4. blueprint: draft -> constraints -> validate -> freeze
     bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
-    rows = [{"course_outcome": "CO1 Explain transport-layer congestion control", "concept": "TCP congestion control",
-             "bloom_level": "understand", "marks": 5, "question_type": "short_answer", "target_difficulty": "hard"}]
-    client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
+    # Freezing refuses what does not validate, so an empty blueprint cannot become a version.
     v = client.post(f"/blueprints/{bp['blueprint_id']}/validate").json()
-    assert not v["ok"] and "inconsistent" in v["issues"][0]
+    assert not v["ok"] and v["issues"] == ["blueprint has no constraints"]
     assert client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).status_code == 422
-    rows[0]["target_difficulty"] = "easy"
+    rows = [{"course_outcome": "CO1 Explain transport-layer congestion control", "concept": "TCP congestion control",
+             "bloom_level": "understand", "marks": 5, "question_type": "short_answer"}]
     client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
     assert client.post(f"/blueprints/{bp['blueprint_id']}/validate").json() == {
-        "ok": True, "issues": [], "total_marks": 5, "outcomes": {rows[0]["course_outcome"]: 5}}
+        "ok": True, "issues": [], "total_marks": 5,
+        "outcomes": {rows[0]["course_outcome"]: 5}, "uncovered": []}
     frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
     assert frozen["version"] == 1 and frozen["frozen_at"]
     assert client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator).status_code == 409
@@ -138,7 +137,7 @@ def test_data_routes_refuse_an_unsigned_request(client):
     An empty Authorization header overrides the session the fixture attaches, which is the closest
     a shared client can get to sending no header at all."""
     anon = {"Authorization": ""}
-    for path in ("/courses", "/bank/entries", "/novelty/model", "/evaluation/arms"):
+    for path in ("/courses", "/bank/entries", "/evaluation/arms"):
         assert client.get(path, headers=anon).status_code == 401, path
     assert client.post("/auth/login", json={"email": "coordinator@example.edu"}, headers=anon).status_code == 200
 
@@ -314,8 +313,7 @@ def test_a_draft_blueprint_can_be_discarded_but_a_frozen_one_cannot(client, new_
 
     keep = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
     rows = [{"course_outcome": "CO1 Explain DFD notation", "concept": "data store",
-             "bloom_level": "understand", "marks": 2, "question_type": "short_answer",
-             "target_difficulty": "easy"}]
+             "bloom_level": "understand", "marks": 2, "question_type": "short_answer"}]
     client.put(f"/blueprints/{keep['blueprint_id']}/constraints", json=rows, headers=coordinator)
     frozen = client.post(f"/blueprints/{keep['blueprint_id']}/freeze", headers=coordinator)
     assert frozen.status_code == 200, frozen.text
@@ -342,8 +340,7 @@ def test_a_coordinator_runs_the_workflow_but_is_barred_from_the_blinded_queue(cl
 
     bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
     rows = [{"course_outcome": "CO1 Explain DFD notation", "concept": "data store",
-             "bloom_level": "understand", "marks": 2, "question_type": "short_answer",
-             "target_difficulty": "easy"}]
+             "bloom_level": "understand", "marks": 2, "question_type": "short_answer"}]
     client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
     frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
 
@@ -435,12 +432,156 @@ def test_an_unlisted_address_gets_no_role_and_the_grant_is_recorded(client):
         created = db.scalar(select(RoleChange).where(RoleChange.user_id == user.user_id))
         assert created.actor_id is None and created.to_role == "pending"
 
-    coordinator = login(client, "coordinator@example.edu")
+    admin = login(client, "coordinator@example.edu")
     granted = client.post(f"/auth/people/{user.user_id}/role",
-                          json={"role": "reviewer"}, headers=coordinator)
-    assert granted.status_code == 200 and granted.json()["role"] == "reviewer"
+                          json={"role": "member"}, headers=admin)
+    assert granted.status_code == 200 and granted.json()["role"] == "member"
 
-    people = client.get("/auth/people", headers=coordinator).json()
+    people = client.get("/auth/people", headers=admin).json()
     row = next(p for p in people if p["email"] == "stranger@example.edu")
     assert row["role_set_by"] == "Course Coordinator"
     assert "People screen" in row["role_reason"]
+
+    # Being admitted is not the same as being on a subject: that is a second, separate act,
+    # and until it happens the account can open nothing.
+    stranger = login(client, "stranger@example.edu")
+    assert client.get("/courses", headers=stranger).json() == []
+    course_id = client.get("/courses", headers=admin).json()[0]["course_id"]
+    assert client.get(f"/courses/{course_id}/materials", headers=stranger).status_code == 404
+    member = client.post(f"/courses/{course_id}/members",
+                         json={"user_id": str(user.user_id), "role": "reviewer"}, headers=admin)
+    assert member.status_code == 201 and member.json()["role"] == "reviewer"
+    assert [c["course_id"] for c in client.get("/courses", headers=stranger).json()] == [course_id]
+    assert client.get(f"/courses/{course_id}/materials", headers=stranger).status_code == 200
+
+
+def test_a_frozen_blueprint_is_revised_by_copying_it(client, new_course):
+    """plan.md 14.5. A frozen blueprint is never edited in place: runs, candidates and compliance
+    reports reference its constraint ids, and the evaluation claims rest on those still meaning
+    what they meant at generation time."""
+    coordinator = login(client, "coordinator@example.edu")
+    course_id = new_course("REVISE", "Revision Course")
+
+    bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    rows = [{"course_outcome": "CO1 Explain DFD notation", "concept": "data store",
+             "bloom_level": "understand", "marks": 2, "question_type": "short_answer"}]
+    client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
+    frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
+    original_constraint = frozen["constraints"][0]["constraint_id"]
+
+    revised = client.post(f"/blueprints/{frozen['blueprint_id']}/revise", headers=coordinator)
+    assert revised.status_code == 201, revised.text
+    draft = revised.json()
+    assert draft["version"] is None and draft["frozen_at"] is None
+    assert draft["revised_from"] == frozen["blueprint_id"]
+    assert draft["revised_from_version"] == frozen["version"]
+    # the rows are copied, with their own ids
+    assert [c["concept"] for c in draft["constraints"]] == ["data store"]
+    assert draft["constraints"][0]["constraint_id"] != original_constraint
+
+    # the frozen version is untouched, and still refuses to be edited
+    after = client.get(f"/blueprints/{frozen['blueprint_id']}", headers=coordinator).json()
+    assert after["frozen_at"] == frozen["frozen_at"]
+    assert after["constraints"][0]["constraint_id"] == original_constraint
+    assert client.put(f"/blueprints/{frozen['blueprint_id']}/constraints", json=rows,
+                      headers=coordinator).status_code == 409
+
+    # the copy is an ordinary draft: editable, and freezable as the next version
+    rows[0]["marks"] = 5
+    assert client.put(f"/blueprints/{draft['blueprint_id']}/constraints", json=rows,
+                      headers=coordinator).status_code == 200
+    next_version = client.post(f"/blueprints/{draft['blueprint_id']}/freeze", headers=coordinator).json()
+    assert next_version["version"] == frozen["version"] + 1
+
+
+def test_a_draft_is_edited_rather_than_revised(client, new_course):
+    coordinator = login(client, "coordinator@example.edu")
+    course_id = new_course("REVISE2", "Revision Roles")
+    draft = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    refused = client.post(f"/blueprints/{draft['blueprint_id']}/revise", headers=coordinator)
+    assert refused.status_code == 409 and "still a draft" in refused.json()["detail"]
+
+
+def test_a_reviewer_cannot_revise_a_blueprint(client, new_course):
+    coordinator = login(client, "coordinator@example.edu")
+    reviewer = login(client, "reviewer1@example.edu")
+    course_id = new_course("REVISE3", "Revision Permissions")
+    bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    client.put(f"/blueprints/{bp['blueprint_id']}/constraints", headers=coordinator,
+               json=[{"course_outcome": "CO1 Explain DFD notation", "concept": "data store",
+                      "bloom_level": "understand", "marks": 2, "question_type": "short_answer"}])
+    frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
+    assert client.post(f"/blueprints/{frozen['blueprint_id']}/revise",
+                       headers=reviewer).status_code == 403
+
+
+def test_a_suggestion_reaches_the_prompt_without_loosening_the_blueprint(client, new_course, monkeypatch):
+    """plan.md 14.4. The hint is a preference; the constraint row is the rule."""
+    coordinator = login(client, "coordinator@example.edu")
+    course_id = new_course("HINT", "Suggestion Course")
+
+    seen = {}
+
+    class Recorder(StubAdapter):
+        def generate(self, req):
+            seen["user"] = req.user
+            return super().generate(req)
+
+    monkeypatch.setattr(orchestrator, "get_adapter", lambda: Recorder())
+
+    bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    client.put(f"/blueprints/{bp['blueprint_id']}/constraints", headers=coordinator,
+               json=[{"course_outcome": "CO1 Explain transport-layer congestion control",
+                      "concept": "TCP congestion control", "bloom_level": "understand",
+                      "marks": 5, "question_type": "short_answer"}])
+    frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
+
+    plain = client.post(f"/blueprints/{frozen['blueprint_id']}/generate", headers=coordinator).json()
+    assert plain["suggestion"] is None
+    assert "reviewer has asked for this" not in seen["user"]
+
+    hinted = client.post(f"/blueprints/{frozen['blueprint_id']}/generate", headers=coordinator,
+                         json={"suggestion": "  avoid code-reading questions  "}).json()
+    assert hinted["suggestion"] == "avoid code-reading questions"
+    assert "avoid code-reading questions" in seen["user"]
+    # the constraint is still stated, and still says it wins
+    assert "Bloom level: understand" in seen["user"]
+    assert "which always wins" in seen["user"]
+
+    # a run that asked for something different is not the same configuration
+    assert hinted["prompt_hash"] != plain["prompt_hash"]
+
+    # whitespace is not a suggestion
+    blank = client.post(f"/blueprints/{frozen['blueprint_id']}/generate", headers=coordinator,
+                        json={"suggestion": "   "}).json()
+    assert blank["suggestion"] is None and blank["prompt_hash"] == plain["prompt_hash"]
+
+
+def test_a_hinted_run_is_kept_out_of_the_evaluation(client, new_course, monkeypatch):
+    """A hint is a confound, so a study must not be able to pick such a run up by accident."""
+    from app.db import SessionLocal
+    from app.models import GenerationRun
+    from app.services.evaluation import harness
+    from sqlalchemy import select as sa_select
+
+    coordinator = login(client, "coordinator@example.edu")
+    course_id = new_course("HINTEVAL", "Suggestion And Study")
+    monkeypatch.setattr(orchestrator, "get_adapter", lambda: StubAdapter())
+
+    bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
+    client.put(f"/blueprints/{bp['blueprint_id']}/constraints", headers=coordinator,
+               json=[{"course_outcome": "CO1 Explain transport-layer congestion control",
+                      "concept": "TCP congestion control", "bloom_level": "understand",
+                      "marks": 5, "question_type": "short_answer"}])
+    frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
+    blueprint_id = frozen["blueprint_id"]
+
+    client.post(f"/evaluation/blueprints/{blueprint_id}/study", headers=coordinator,
+                json={"arms": ["full_system"], "seeds": 1})
+    with SessionLocal() as db:
+        assert len(harness.study_runs(db, blueprint_id)) == 1
+        # an arm-labelled run that somehow carried a hint is excluded by the query, not by trust
+        run = db.scalars(sa_select(GenerationRun).where(GenerationRun.blueprint_id == blueprint_id)).first()
+        run.suggestion = "make them easier"
+        db.commit()
+        assert harness.study_runs(db, blueprint_id) == []

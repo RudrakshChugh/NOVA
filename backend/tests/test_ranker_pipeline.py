@@ -11,7 +11,7 @@ from app.llm.base import GenerationResult
 from app.services.ranker import models as rm
 from app.services.ranker.features import FEATURE_NAMES
 
-from .conftest import first_passage_sentence, login, write_pdf
+from .conftest import first_passage_sentence, login, upload_material, write_pdf
 
 MATERIAL = (
     "Normalisation removes redundancy from a relational schema. "
@@ -24,13 +24,13 @@ MATERIAL = (
 )
 
 ROWS = [
-    ("CO1 Explain relational normalisation", "first normal form", "remember", 2, "short_answer", "easy"),
-    ("CO1 Explain relational normalisation", "second normal form", "understand", 5, "short_answer", "easy"),
-    ("CO1 Explain relational normalisation", "third normal form", "understand", 5, "short_answer", "easy"),
-    ("CO2 Apply normalisation to a schema", "functional dependencies", "apply", 5, "short_answer", "medium"),
-    ("CO2 Apply normalisation to a schema", "Boyce-Codd normal form", "analyze", 10, "long_answer", "medium"),
-    ("CO2 Apply normalisation to a schema", "denormalisation trade-offs", "evaluate", 5, "short_answer", "hard"),
-    ("CO1 Explain relational normalisation", "atomic values", "remember", 2, "short_answer", "easy"),
+    ("CO1 Explain relational normalisation", "first normal form", "remember", 2, "short_answer"),
+    ("CO1 Explain relational normalisation", "second normal form", "understand", 5, "short_answer"),
+    ("CO1 Explain relational normalisation", "third normal form", "understand", 5, "short_answer"),
+    ("CO2 Apply normalisation to a schema", "functional dependencies", "apply", 5, "short_answer"),
+    ("CO2 Apply normalisation to a schema", "Boyce-Codd normal form", "analyze", 10, "long_answer"),
+    ("CO2 Apply normalisation to a schema", "denormalisation trade-offs", "evaluate", 5, "short_answer"),
+    ("CO1 Explain relational normalisation", "atomic values", "remember", 2, "short_answer"),
 ]
 
 BLOOM_OPENER = {
@@ -86,17 +86,13 @@ def reviewed_course(client, new_course, tmp_path_factory, request):
     course_id = new_course("RANK101", "Ranker Course")
 
     pdf = write_pdf(tmp_path_factory.mktemp("rank") / "unit.pdf", MATERIAL)
-    with pdf.open("rb") as f:
-        assert client.post(
-            f"/courses/{course_id}/materials",
-            files={"file": ("unit.pdf", f, "application/pdf")}, headers=coordinator,
-        ).status_code == 201
+    assert upload_material(client, course_id, pdf, coordinator)["state"] == "done"
 
     bp = client.post(f"/courses/{course_id}/blueprints", headers=coordinator).json()
     rows = [
         {"course_outcome": o, "concept": c, "bloom_level": b, "marks": m,
-         "question_type": t, "target_difficulty": d}
-        for o, c, b, m, t, d in ROWS
+         "question_type": t}
+        for o, c, b, m, t in ROWS
     ]
     client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
     frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
@@ -152,7 +148,7 @@ def test_ranker_trains_compares_both_floors_and_records_its_choice(client, revie
     assert selection["lightgbm_beat_both_floors"] == (selection["chosen"] == rm.LIGHTGBM)
     assert metrics["last_session_ndcg"]  # the chronologically last sitting, reported alone
 
-    assert client.get("/ranker/model").json()["algorithm"] == card["algorithm"]
+    assert client.get(f"/courses/{reviewed_course['course_id']}/ranker/model").json()["algorithm"] == card["algorithm"]
 
 
 def test_candidates_come_back_in_the_learned_order(client, reviewed_course):
@@ -161,7 +157,7 @@ def test_candidates_come_back_in_the_learned_order(client, reviewed_course):
     from app.services.ranker import load_active
     from app.services.ranker.features import extract
 
-    scorer = load_active()
+    scorer = load_active(reviewed_course["course_id"])
     assert scorer is not None
 
     returned = client.get(f"/runs/{reviewed_course['runs'][0]}/candidates").json()

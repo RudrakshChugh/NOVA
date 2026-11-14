@@ -9,6 +9,10 @@ reads this file should understand what we are building, how every part works,
 what the prototype covers, what it does not, and how each decision traces back
 to a project requirement.
 
+Section 14 lists changes agreed after the prototype was deployed. They are
+not built yet, and where one contradicts an earlier section it says so and
+wins; read it alongside Sections 3, 6, 7 and 8 rather than after them.
+
 ---
 
 ## 1. Problem statement
@@ -53,8 +57,8 @@ audits them before a human sees them.
 ### 3.1 Three core contributions
 
 **Blueprint compliance engine.** The coordinator defines a blueprint specifying
-course outcome, concept, Bloom level, marks, question type and target difficulty
-for each required question. Every generated candidate is checked against every
+course outcome, concept, Bloom level, marks and question type for each
+required question. Every generated candidate is checked against every
 constraint. Violations are named by field, expected value and observed value.
 This is rule-based validation plus a Bloom-level classifier, deliberately not
 the LLM grading its own output.
@@ -451,7 +455,6 @@ blueprint_constraints
   bloom_level     TEXT
   marks           INT
   question_type   TEXT
-  target_difficulty TEXT
 
 generation_runs
   run_id          UUID PK
@@ -735,3 +738,361 @@ This analysis is what separates a working system from a research
 contribution, because it shows not just that the system works in aggregate
 but where and why it fails, which is what a reviewer or a future builder
 needs.
+
+---
+
+## 14. Accepted changes (agreed, not yet implemented)
+
+These are changes to the scope agreed after the prototype was working and
+deployed. They are recorded here before any code is written so that the
+reasoning survives, and so that the order of work is decided once rather than
+improvised. Where one of them contradicts an earlier section of this document,
+the change below wins and the earlier text is superseded; the superseded
+passage is named explicitly in each case.
+
+Nothing in this section is built yet. Section 14.9 fixes the order.
+
+### 14.1 Multiple subjects, with a coordinator confined to their own
+
+**Implemented, 14 November 2026.** Built as specified below, with four additions recorded at
+the end of the subsection.
+
+Today the deployment holds exactly one course, seeded from `COURSE_CODE` and
+`COURSE_TITLE`, and `coordinator` is a platform-wide role: any coordinator can
+see and change anything. The institute runs many subjects with a different
+coordinator for each, so the role has to become per-subject.
+
+What this needs:
+
+- `courses` holds one row per subject, created in the app rather than seeded
+  from configuration.
+- A new `course_members` table (`course_id`, `user_id`, `role`, `granted_by`,
+  `granted_at`) becomes the authority on who may do what, and `users.role`
+  shrinks to a platform-level value: `pending`, `member` or `admin`. An admin
+  (the `COORDINATOR_EMAILS` allowlist of Section 4) creates a subject and names
+  its coordinator; that coordinator then grants reviewers on their own subject
+  only.
+- Every read and write is filtered by membership, not merely by the `course_id`
+  in the path. The existing tables already carry `course_id` directly
+  (`materials`, `pyq_papers`, `blueprints`) or reach it through one join
+  (`generation_runs`, `candidate_questions`, `bank_entries`), so this is an
+  authorisation layer rather than a schema rewrite. The important consequence is
+  that a missing filter is now a disclosure bug between colleagues rather than a
+  cosmetic one, so the test suite gains a cross-tenant case per router: the
+  coordinator of subject A receives 404 on every object of subject B.
+- The shell gains a subject picker, visible on every screen, because the single
+  most likely error in a multi-subject build is uploading a paper to the wrong
+  subject.
+
+One exception is deliberate. The Research Evaluator of Section 6.1 has to read
+across subjects to compute the metrics of Section 13.1, so that stays a
+platform-level role, held by nobody on the production deployment during
+ordinary teaching use.
+
+This supersedes Section 6.1's description of a coordinator as an actor without
+scope, and the single-course assumption of Section 7.1.
+
+**Four things the implementation added to this specification.**
+
+- **Fitted models and labelled pairs are per subject too.** A combiner is fitted on one
+  subject's past-year corpus and a ranker on one subject's reviewers, but both were stored at
+  one path and recorded in one unscoped table. Left alone, multiple subjects would have meant
+  whichever subject trained last served every other — a correctness bug, not a disclosure one,
+  and invisible from the screen. `duplicate_pairs` and `model_versions` gained a `course_id`,
+  the artefacts gained a per-subject filename, and every novelty and ranker route moved under
+  `/courses/{id}/`.
+- **`GET /courses` returns the role the caller holds on each subject.** Every screen gates its
+  controls on it, so sending it with the subject saves a request per screen and keeps the two
+  from disagreeing about what the person may do.
+- **`GET /auth/directory` lists admitted accounts to any admitted account.** A coordinator
+  cannot add a reviewer they cannot name, and the alternative — typing an address and hoping —
+  makes the wrong person a reviewer on a typo. Pending accounts are excluded, so the list
+  cannot be used to route around admission.
+- **A startup backfill translates what came before.** Accounts holding the old platform-wide
+  `reviewer` or `coordinator` keep exactly what they had, on every subject that exists at the
+  time, and the translation is written to the role audit so it is not later mistaken for
+  somebody's deliberate act. Where exactly one subject exists, the unscoped labelled pairs and
+  model rows are attached to it; where more than one does, they are left unattached rather than
+  guessed at, because giving one department's labelled pairs to another is worse than losing
+  them.
+
+### 14.2 Uploading several files at once
+
+**Implemented, 14 November 2026,** as specified: a list endpoint answering 202 with one row
+per file, a SHA-256 of the bytes that makes a re-uploaded folder a no-op, and an
+`ingestion_jobs` table the upload screen polls. Jobs run one after another rather than in
+parallel: the embedder is this process’s memory high-water mark, and running several at once
+on a 512 MB instance kills the service instead of one upload. A file that fails to parse takes
+its half-made material row with it, because a material with no passages is worse than none.
+
+`POST /courses/{id}/materials` accepts one `UploadFile`, and the upload screen
+submits one file at a time. A coordinator holding a folder of twelve lecture
+decks has to repeat the same interaction twelve times, and the
+parse-chunk-embed pass runs inside the request, so each one blocks.
+
+What this needs:
+
+- The endpoint accepts a list and returns one result row per file, each
+  succeeding or failing independently. A corrupt PDF in position four must not
+  discard the other eleven.
+- A content hash per file, so re-uploading an overlapping set does not embed the
+  same passages twice and inflate the retrieval index.
+- Ingestion moves out of the request. A new `ingestion_jobs` table (`job_id`,
+  `course_id`, `material_id`, `state`, `error`, `created_at`, `finished_at`)
+  lets the browser be closed while the work proceeds, and gives the upload
+  screen something truthful to poll. This matters more on the free deployment
+  than it would locally: embedding is the slow step, the service has 512 MB, and
+  a long synchronous request is the thing most likely to be cut off by the
+  platform.
+- The screen shows a per-file queue with its own state, and reports partial
+  failure plainly rather than as one aggregate error.
+
+### 14.3 Paper assembly and PDF export
+
+**Implemented, 14 November 2026,** with one deliberate departure recorded at the end of the
+subsection.
+
+The pipeline currently ends at a published bank entry, which is a row, not a
+document anyone can hand to a student. The missing step is binding finalised
+questions into a real paper and printing it.
+
+What this needs:
+
+- `paper_templates`: the institutional furniture of the first page. University
+  and department name, subject code and title, examination name, date, duration,
+  maximum marks, and the instructions block.
+- `papers` and `paper_items`: an ordered selection of published questions,
+  grouped into numbered questions with lettered sub-parts, carrying the marks
+  column and the CO and Bloom columns in the same shape the past-paper grid
+  parser in `pyq_ingestion.py` already reads back. Assembly is where ordering
+  and grouping are decided, so it is a stored object, not a transient view.
+- A total-marks check against the blueprint the questions came from. A paper
+  that does not add up to the blueprint total is the exact error this project
+  exists to prevent, and it would be absurd to catch it per question and then
+  lose it at the last step.
+- A frozen snapshot per paper, in the same spirit as `bank_entries`: a printed
+  paper must be reproducible later, even after its questions are revised.
+- An answer-key rendering of the same paper, from the stored answer keys.
+
+On how to render: a headless browser is not affordable here, because Chromium
+does not fit beside the embedding model in 512 MB on the free tier. The
+prototype should therefore use either a print-specific stylesheet and the
+browser's own print-to-PDF, which costs nothing and leaves fidelity with the
+person printing, or ReportLab on the server when a byte-identical artefact is
+wanted. Recommended: the print stylesheet first, a server-side renderer only if
+printed output proves unreliable across machines.
+
+This extends Section 3.2 step 9, which currently ends at publication.
+
+**The departure: the PDF is rendered on the server, not by the browser.**
+
+This subsection recommended a print stylesheet first, on the grounds that a headless browser
+does not fit in 512 MB. That reasoning still holds, but it ruled out the wrong alternative:
+ReportLab was already a dependency of this project, draws the same bytes on every machine, and
+produces a file that can be attached to an email or handed to a print room. Asking each
+coordinator to use their own browser’s print dialog would have made the output depend on
+which browser they happen to have, for no saving at all. The layout follows the institutional
+grid the past-paper parser reads back, so a paper this system prints is a paper this system
+can read.
+
+Two smaller decisions worth recording. The answer key is a separate download and is
+coordinator-only, because it is the one artefact here that must not reach a candidate. And a
+finalised paper prints from its snapshot rather than from the live rows, so reprinting it next
+term produces the paper that was actually sat.
+
+### 14.4 An optional suggestion when generating
+
+A reviewer should be able to say what they are after, in their own words,
+without having to encode it as a constraint: "numerical, on asymptotic
+analysis", "avoid code-reading questions".
+
+What this needs:
+
+- `generation_runs.suggestion TEXT NULL`, optionally also per constraint, and an
+  optional field on the generate screen that is empty by default.
+- The text is injected into the prompt inside a clearly delimited block, and
+  `prompt_hash` is computed over it, so two runs with different suggestions are
+  never mistaken for the same configuration. Reproducibility depends on this.
+- The suggestion must not be able to loosen the blueprint. Compliance continues
+  to judge the draft against the constraint row and never against the hint, so a
+  suggestion that conflicts with the constraint produces a violation rather than
+  a quiet override. That also makes the field safe when its text is pasted from
+  somewhere else, since it carries no authority over the audit.
+- For the evaluation protocol the field is a confound: a hinted run is not
+  comparable with an unhinted baseline. Any run whose `suggestion` is non-empty
+  is therefore excluded from the baseline and ablation comparisons of Sections
+  3.3.2 and 3.3.5, and the exclusion is made by querying that column rather than
+  by remembering which runs were which.
+
+**Implemented, 14 November 2026,** as specified. The field is empty by default, it is folded
+into `prompt_hash` so two runs that asked for different things cannot read as the same
+configuration, and it is delimited in the prompt and labelled as a preference that the
+blueprint row overrides. The evaluation exclusion is a `WHERE suggestion IS NULL` on the study
+query rather than a convention about which runs were which.
+
+### 14.5 Editing a blueprint
+
+**Implemented, 14 November 2026,** as `POST /blueprints/{id}/revise`. The descent is recorded
+on the copy (`blueprints.revised_from`) and shown on screen as "from v2", so a reader can see
+that version 3 came from version 2 rather than from nowhere.
+
+Half of this exists already, and the request is worth reading precisely. A
+draft blueprint is editable today: `PUT /blueprints/{id}/constraints` replaces
+the constraint set, and the table on the blueprint screen is editable until the
+blueprint is frozen. What is missing is a way to change a blueprint after it has
+been frozen.
+
+A frozen blueprint must not be mutated in place. Runs, candidates and compliance
+reports all reference `constraint_id`, and the evaluation claims of Section 13
+rest on those references still meaning what they meant at generation time;
+editing a frozen row would silently rewrite history. The change is therefore a
+revise action that copies version *n* into a new draft, version *n* plus one,
+leaving *n* and everything pointing at it intact.
+
+What this needs:
+
+- `POST /blueprints/{id}/revise`, returning the new draft, and a visible
+  lineage on the screen so it is obvious that version 3 descends from version 2.
+- Live validation while editing (a running total of marks, outcome coverage)
+  rather than validation only on demand, since the point of editing is to
+  converge on something that validates.
+
+### 14.6 Syllabus upload, and course outcomes extracted from it
+
+**Implemented, 14 November 2026.** Built as specified below, with two notes at the end of the
+subsection.
+
+Course outcomes are free text typed into each constraint row today, which means
+the same outcome gets spelled three ways across one blueprint and the `outcomes`
+map returned by validation cannot be trusted as coverage.
+
+What this needs:
+
+- The coordinator uploads the syllabus (PDF or DOCX) for a subject.
+- A parser extracts the course outcomes into rows. The institutional syllabus
+  lists them as a numbered block or a table, in the same family of layouts the
+  past-paper grid parser already handles, so this is an extension of that
+  approach: match the outcome label, take the text that follows, join
+  continuation lines, stop at the next label or heading.
+- A review screen shows what was extracted before anything is saved, with every
+  row editable and low-confidence extractions flagged rather than hidden. The
+  parser will not be right every time, and the person who wrote the syllabus is
+  sitting in front of it.
+- After saving, the list stays editable. A syllabus gets revised, and an outcome
+  may be reworded without re-uploading the document.
+- A new `course_outcomes` table (`outcome_id`, `course_id`, `code`, `text`,
+  `position`, `source_material_id`, `confidence`), and the blueprint's course
+  outcome field becomes a dropdown over that list instead of a free-text box.
+- Blueprint validation then means something stronger: coverage is checked
+  against the subject's real outcomes, so an outcome with no marks allocated can
+  be reported as a gap rather than merely summarised.
+
+One migration note: blueprints that already exist hold free-text outcomes with
+no `outcome_id`. They are either mapped by hand when the subject's outcomes are
+first extracted, or left alone and treated as legacy. Whichever is chosen, the
+column stays nullable so an unmapped historical blueprint still loads.
+
+**Two notes on the implementation.**
+
+- **The label is matched across the whole document, not line by line.** Text pulled out of a
+  PDF does not keep the line breaks the page showed: an outcome can arrive mid-line, and a
+  label can end up at the tail of the line before it. The first version anchored to the start
+  of a line and dropped two outcomes out of four from a perfectly ordinary syllabus. Taking the
+  text between one label and the next also makes a wrapped outcome come back whole, which
+  removed the continuation rule entirely.
+- **An outcome keeps its identity across a save.** Rows are matched by code rather than
+  replaced wholesale, so rewording CO2 does not break the blueprint rows pointing at it. Only a
+  code that disappears is removed, and the constraints that referenced it fall back to the
+  wording they were written with rather than to nothing — a published question has to keep
+  meaning what it meant.
+
+### 14.7 Removing target difficulty
+
+**Implemented, 14 November 2026.** What was done is described below; the one
+deviation from this specification is recorded at the end of the subsection.
+
+`target_difficulty` is dropped from the blueprint. The reasoning is that
+difficulty is subjective: two faculty members looking at the same question
+disagree about whether it is medium or hard, and the fields that remain, namely
+Bloom level, marks and question type, already carry the intent that matters and
+are checkable. Keeping a field that cannot be adjudicated only invites a
+disagreement the system has no way to settle.
+
+What this touches:
+
+- `blueprint_constraints.target_difficulty` is dropped, along with `DIFFICULTIES`
+  and the field on `ConstraintIn`, the select on the blueprint screen, and the
+  line in the generation prompt.
+- The difficulty-to-Bloom consistency rule in `routers/blueprints.py` goes with
+  it. That rule was the only validation this field supported, so nothing else is
+  weakened: a check is removed along with the thing it checked.
+- The ranker loses its `difficulty_rank` feature (`ranker/features.py`). The
+  feature list is versioned, so a model fitted before the change cannot be
+  loaded after it. Any fitted ranker must be refitted and the feature-list
+  version bumped, so that a stale artefact fails loudly instead of scoring
+  against a shifted vector.
+- Published `bank_entries` snapshots already contain `target_difficulty` in their
+  JSON. Snapshots are historical records and are not rewritten, so the reader
+  must tolerate the key being absent on new entries and present on old ones.
+
+Two things are *not* affected, despite the shared word. The pair-difficulty
+stratification of the labelled duplicate set in Sections 3.1 and 5 (surface
+duplicate versus hard paraphrase) describes how hard a pair is to detect, which
+is a property of the evaluation set rather than a blueprint field, and it stays.
+Section 8's schema listing of `target_difficulty` is superseded here.
+
+One honesty point for the report: the blueprint constraint satisfaction rate of
+Section 13.1 has a different denominator before and after this change, because
+there is one fewer field per constraint to satisfy. Figures from runs on either
+side of the change are not comparable and must not be pooled.
+
+**Deviation from the above, and two things it made necessary.**
+
+- This subsection asked for the feature-list version to be *bumped* so a stale
+  ranker fails loudly. What was built compares the stored `feature_names` with
+  the current `FEATURE_NAMES` and raises `FeatureSetMismatch`
+  (`ranker/models.py`). A names comparison cannot drift out of step with the
+  feature list the way a hand-maintained version number can, and it names what
+  actually changed. `load_active()` catches it and returns `None`, so ordering
+  falls back to blueprint position rather than the review screen failing for
+  everyone; the ranker model card reports `in_use: false` with the reason, which
+  is where "loudly" now lives.
+- A deployed database has the column as `NOT NULL`, so an insert that no longer
+  supplies it fails until the column itself is gone. `SCHEMA_PATCHES` therefore
+  gained `ALTER TABLE blueprint_constraints DROP COLUMN IF EXISTS
+  target_difficulty` — the first destructive statement in that list.
+- The end-to-end test used the difficulty/Bloom mismatch to prove that freezing
+  refuses what does not validate. That rule is gone, so the test now proves the
+  same thing with an empty blueprint, which validation still rejects.
+
+### 14.8 What stays as it is
+
+Recorded so the absence is deliberate rather than forgotten: the three core
+contributions of Section 3.1, the evaluation protocol of Section 3.3, the
+blinded review queue remaining reviewer-only, the swappable LLM backend of
+Section 4, and the novelty engine's four signals are all unchanged by the above.
+
+### 14.9 Order of work
+
+The dependencies are real, so the order is not arbitrary.
+
+1. **14.7, removing difficulty** — **done, 14 November 2026.** First and alone,
+   because it is a deletion that touches the schema, the prompt, the ranker
+   features and the UI, and every later item would otherwise have been written
+   twice.
+2. **14.1, multiple subjects** — **done, 14 November 2026.** Next, because it
+   changes the authorisation model every later screen is built on, and
+   retrofitting tenancy costs far more than building on it.
+3. **14.6, syllabus and course outcomes** — **done, 14 November 2026.** Next,
+   since the outcome list belongs to a subject and the blueprint dropdown
+   depends on it.
+4. **14.5, revising a frozen blueprint** — **done, 14 November 2026.** Small, as
+   expected, once the blueprint screen was already open for the dropdown change.
+5. **14.2, multi-file upload**, and **14.4, the suggestion field** — **both done,
+   14 November 2026.** Self-contained, as expected.
+6. **14.3, paper assembly and PDF** — **done, 14 November 2026.** Last, because it
+   consumes published questions and is the only item whose value depends on the
+   whole pipeline already being trustworthy.
+
+All seven changes of this section are implemented. The workflow is now six steps:
+sources, blueprint, generate, review, question bank, paper.

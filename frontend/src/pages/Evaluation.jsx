@@ -245,7 +245,7 @@ export default function Evaluation({ course, user }) {
   }
 
   const toggle = (label) => setSelected(selected.includes(label) ? selected.filter((l) => l !== label) : [...selected, label])
-  const isCoordinator = user.role === 'coordinator'
+  const isCoordinator = course.your_role === 'coordinator'
   const completedRuns = status ? Object.values(status.arms).reduce((n, a) => n + a.completed, 0) : 0
 
   return (
@@ -339,7 +339,7 @@ export default function Evaluation({ course, user }) {
         )}
       </Card>
 
-      {user.role === 'reviewer' && status?.total_runs > 0 && (
+      {course.your_role === 'reviewer' && status?.total_runs > 0 && (
         <Card
           title="Blinded review"
           hint="Questions from every arm, shuffled together, with no indication of which system wrote which. Your order is your own and stays the same if you come back to it."

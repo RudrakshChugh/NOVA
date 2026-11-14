@@ -327,11 +327,12 @@ Set `OIDC_ISSUER` and institutional SSO replaces this; turn `DEV_LOGIN` off when
 
 ### The journey
 
-1. **Upload sources** — course material (what questions are written from) and past-year papers (what they are checked against).
-2. **Define blueprint** — add rows, validate, freeze as a version.
-3. **Generate** — retrieve, draft, compliance audit, novelty audit, rank.
-4. **Review** — six-check tiles, draft history, highlighted source passages, novelty breakdown; accept / edit / reject; publish.
+1. **Upload sources** — course material (what questions are written from), past-year papers (what they are checked against) and the syllabus (the course outcomes a blueprint row points at). Several files at a time; each is indexed on its own.
+2. **Define blueprint** — add rows, choose each row's course outcome, validate, freeze as a version. A frozen version is revised by copying it, never by editing it.
+3. **Generate** — retrieve, draft, compliance audit, novelty audit, rank. Optionally say what you are after, in your own words.
+4. **Review** — check tiles, draft history, highlighted source passages, novelty breakdown; accept / edit / reject; publish.
 5. **Question bank** — published questions with readable provenance.
+6. **Paper** — bind published questions into a numbered paper, check it adds up to its blueprint, and download it as a PDF. The answer key is a separate, coordinator-only download.
 
 **Engines** builds the labelled pair set, fits the novelty combiner and the ranker, and shows their model cards. **Evaluation** launches the arms, serves the blinded queue and renders the report.
 
@@ -339,7 +340,7 @@ Set `OIDC_ISSUER` and institutional SSO replaces this; turn `DEV_LOGIN` off when
 
 ```powershell
 cd backend
-.\.venv\Scripts\python -m pytest -q                              # 66 tests
+.\.venv\Scripts\python -m pytest -q                              # 124 tests
 .\.venv\Scripts\python -m pytest -q tests\test_novelty_signals.py  # one suite
 ```
 
@@ -456,11 +457,22 @@ callback is reached at all ("can only be used within its organisation"), so thos
 second line rather than the first. They become the only line if the consent screen is ever switched
 to External — as does `ALLOWED_EMAILS`, which an Internal app makes unreachable.
 
-A first sign-in creates the account with role **pending**, which satisfies no role check anywhere:
-the person is authenticated and can see nothing. A coordinator grants **reviewer** on the People
-screen. That gate is not ceremony — review decisions are the ranker's training data and the input to
-the inter-rater agreement figure, so a decision recorded by someone outside the study changes a
-reported number.
+Access is granted twice, by two different people, because the two questions are different.
+
+**Admission** is platform standing, and an administrator decides it. A first sign-in creates the
+account as **pending**, which satisfies no check anywhere: the person is authenticated and can
+see nothing. An address listed in `COORDINATOR_EMAILS` is admitted automatically as an
+**admin**; everyone else is admitted as a **member** on the People screen.
+
+**Membership** is standing on one subject, and that subject's coordinator decides it. A member
+is added to a subject as **reviewer** or **coordinator**, and holds that role there and nowhere
+else: a coordinator of one subject cannot read another subject's material, drafts or question
+bank, and gets a 404 rather than a 403 on them, so they cannot even confirm it exists. An admin
+is treated as a coordinator of every subject, because somebody has to be able to repair one.
+
+That second gate is not ceremony — review decisions are the ranker's training data and the input
+to the inter-rater agreement figure, so a decision recorded by someone outside the study changes
+a reported number.
 
 ### Two things not to do
 
@@ -508,6 +520,7 @@ Rule-based splitting on question numbering (`1.`, `Q1`, `1 a)`, `(a)`, `iii)`) w
 | Statistics | Bootstrap, Wilson score, exact McNemar, Cohen's kappa, NDCG — implemented in `services/metrics.py` |
 | LLM | Ollama (qwen3:8b) · Anthropic SDK, behind one adapter interface |
 | Frontend | React 19, Vite |
+| PDF | ReportLab, rendering the assembled paper server-side |
 | Tests | pytest + FastAPI TestClient against real PostgreSQL |
 
 ---

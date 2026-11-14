@@ -52,11 +52,20 @@ def launch(db: Session, blueprint: Blueprint, arm_labels: list[str], seeds: int 
 
 
 def study_runs(db: Session, blueprint_id: UUID) -> list[GenerationRun]:
-    """Every arm-labelled run of a blueprint, oldest first."""
+    """Every arm-labelled, unhinted run of a blueprint, oldest first.
+
+    A run carrying a reviewer’s free-text suggestion is not comparable with an unhinted
+    baseline: the hint is a confound, and an arm that was quietly helped would overstate
+    whatever the study is trying to measure. The exclusion is a query on the column rather
+    than a convention about which runs were which (plan.md §14.4)."""
     return list(
         db.scalars(
             select(GenerationRun)
-            .where(GenerationRun.blueprint_id == blueprint_id, GenerationRun.arm_label.is_not(None))
+            .where(
+                GenerationRun.blueprint_id == blueprint_id,
+                GenerationRun.arm_label.is_not(None),
+                GenerationRun.suggestion.is_(None),
+            )
             .order_by(GenerationRun.started_at)
         ).all()
     )

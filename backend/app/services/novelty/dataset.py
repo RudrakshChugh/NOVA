@@ -62,7 +62,9 @@ def build_pair_set(
         + build_negatives(pairs_in, neighbours, rng, hard_negatives_per_question, easy_negatives_per_question)
     )
 
-    existing = set(db.scalars(select(DuplicatePair.pair_key)).all())
+    existing = set(
+        db.scalars(select(DuplicatePair.pair_key).where(DuplicatePair.course_id == course_id)).all()
+    )
     added = 0
     for p in constructed:
         key = pair_key(p.left_text, p.right_text)
@@ -71,6 +73,7 @@ def build_pair_set(
         existing.add(key)
         db.add(
             DuplicatePair(
+                course_id=course_id,
                 pair_key=key, left_text=p.left_text, right_text=p.right_text,
                 left_pyq_id=p.left_pyq_id, right_pyq_id=p.right_pyq_id,
                 label=p.label, stratum=p.stratum, provenance=p.provenance, split=assign_split(key, seed),
@@ -81,12 +84,15 @@ def build_pair_set(
     return {
         "added": added,
         "skipped_existing": len(constructed) - added,
-        **stats(db),
+        **stats(db, course_id),
     }
 
 
-def stats(db: Session) -> dict:
-    rows = db.execute(select(DuplicatePair.split, DuplicatePair.stratum, DuplicatePair.label)).all()
+def stats(db: Session, course_id: UUID) -> dict:
+    rows = db.execute(
+        select(DuplicatePair.split, DuplicatePair.stratum, DuplicatePair.label)
+        .where(DuplicatePair.course_id == course_id)
+    ).all()
     return {
         "total": len(rows),
         "composition": composition([(r[0], r[1], r[2]) for r in rows]),
@@ -94,11 +100,13 @@ def stats(db: Session) -> dict:
     }
 
 
-def export_split_manifest(db: Session, path: Path = SPLIT_MANIFEST) -> dict:
+def export_split_manifest(db: Session, course_id: UUID, path: Path | None = None) -> dict:
     """Write the committed split file: the seed, the assignment rule, and every pair's fold.
     Regenerating it can only reproduce the same assignment — the rule depends on nothing else."""
+    path = path or SPLIT_MANIFEST.with_name(f"novelty_split_{course_id}.json")
     rows = db.execute(
         select(DuplicatePair.pair_key, DuplicatePair.split, DuplicatePair.stratum, DuplicatePair.label)
+        .where(DuplicatePair.course_id == course_id)
         .order_by(DuplicatePair.pair_key)
     ).all()
     manifest = {
@@ -116,7 +124,13 @@ def export_split_manifest(db: Session, path: Path = SPLIT_MANIFEST) -> dict:
 def samples(db: Session, course_id: UUID, split: str) -> list[Sample]:
     """Signal vectors for every pair in one fold. IDF and average document length come from the
     course's past-year corpus, so a pair is scored exactly as a live candidate would be."""
-    rows = list(db.scalars(select(DuplicatePair).where(DuplicatePair.split == split)).all())
+    rows = list(
+        db.scalars(
+            select(DuplicatePair).where(
+                DuplicatePair.split == split, DuplicatePair.course_id == course_id
+            )
+        ).all()
+    )
     if not rows:
         return []
     corpus = _corpus(db, course_id)
