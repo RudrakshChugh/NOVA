@@ -80,6 +80,8 @@ function TemplateCard({ course, canEdit }) {
 export default function Paper({ course, go }) {
   const [papers, setPapers] = useState([])
   const [blueprints, setBlueprints] = useState([])
+  const [bank, setBank] = useState([])        // every published question on the subject
+  const [find, setFind] = useState('')
   const [selected, setSelected] = useState(null)
   const [items, setItems] = useState([])
   const [check, setCheck] = useState(null)
@@ -103,6 +105,14 @@ export default function Paper({ course, go }) {
     api(`/courses/${course.course_id}/blueprints`)
       .then((bs) => setBlueprints(bs.filter((b) => b.frozen_at)))
       .catch(() => setBlueprints([]))
+  }, [course.course_id])
+  // A paper is not confined to one blueprint version. A subject accumulates published questions
+  // across every version it has frozen, and a mid-semester paper is normally drawn from several
+  // of them, so the picker below offers the whole bank.
+  useEffect(() => {
+    api(`/bank/entries?course_id=${course.course_id}`)
+      .then(setBank)
+      .catch(() => setBank([]))
   }, [course.course_id])
   useEffect(() => {
     setItems(selected?.items || [])
@@ -130,6 +140,29 @@ export default function Paper({ course, go }) {
       ? `${paper.items.length} published question(s) brought in, in blueprint order.`
       : 'Add published questions to it below.')
   })
+
+  const onPaper = new Set(items.map((i) => i.entry_id))
+  const available = bank
+    .filter((e) => !onPaper.has(e.entry_id))
+    .filter((e) => {
+      const q = find.trim().toLowerCase()
+      if (!q) return true
+      const c = e.snapshot.constraint || {}
+      return `${e.snapshot.stem} ${c.concept || ''} ${c.course_outcome || ''}`.toLowerCase().includes(q)
+    })
+
+  const addItem = (entry) => {
+    const c = entry.snapshot.constraint || {}
+    setItems([...items, {
+      entry_id: entry.entry_id,
+      number: items.length + 1,
+      part: null,
+      marks: c.marks || 1,
+      stem: entry.snapshot.stem,
+      course_outcome: c.course_outcome || '',
+      bloom_level: c.bloom_level || '',
+    }])
+  }
 
   const saveItems = run('save', async () => {
     const paper = await api(`/papers/${selected.paper_id}/items`, {
@@ -264,7 +297,8 @@ export default function Paper({ course, go }) {
 
           {items.length === 0 ? (
             <Empty icon="file" title="Nothing on this paper yet">
-              Start it from a frozen blueprint to bring its published questions in.
+              Add published questions below, or start a paper from a frozen blueprint to bring its
+              own questions in.
             </Empty>
           ) : (
             <Table head={[
@@ -302,6 +336,51 @@ export default function Paper({ course, go }) {
                 </tr>
               ))}
             </Table>
+          )}
+
+          {canEdit && !frozen && (
+            <div className="card-body" style={{ borderTop: '1px solid var(--line)' }}>
+              <div className="subhead">
+                <h3>Add a question</h3>
+                <Badge tone="outline">{available.length} available</Badge>
+                <div className="spacer" />
+                <input
+                  type="search" placeholder="Search the bank" value={find} style={{ maxWidth: 260 }}
+                  onChange={(e) => setFind(e.target.value)} aria-label="Search published questions"
+                />
+              </div>
+              {available.length === 0 ? (
+                <p className="muted">
+                  {bank.length === 0
+                    ? 'Nothing is published on this subject yet.'
+                    : 'Every published question is already on this paper.'}
+                </p>
+              ) : (
+                <Table head={['Question', { label: 'Marks', width: 80 }, 'CO', 'BL',
+                              { label: 'From', width: 120 }, { label: '', width: 80 }]}>
+                  {available.slice(0, 40).map((e) => {
+                    const c = e.snapshot.constraint || {}
+                    return (
+                      <tr key={e.entry_id}>
+                        <td className="prose">{e.snapshot.stem}</td>
+                        <td>{c.marks}</td>
+                        <td className="muted">{(c.course_outcome || '').split(' ')[0]}</td>
+                        <td className="muted cap">{c.bloom_level}</td>
+                        <td className="muted">Blueprint v{e.snapshot.blueprint?.version ?? '?'}</td>
+                        <td>
+                          <Btn size="sm" icon="plus" onClick={() => addItem(e)}>Add</Btn>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </Table>
+              )}
+              {available.length > 40 && (
+                <p className="muted" style={{ marginTop: 'var(--s2)' }}>
+                  Showing the first 40 of {available.length}. Search to narrow it.
+                </p>
+              )}
+            </div>
           )}
 
           <div className="card-body">
