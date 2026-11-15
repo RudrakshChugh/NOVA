@@ -41,6 +41,17 @@ _HEADING = re.compile(r"\bcourse\s+outcomes?\b|\blearning\s+outcomes?\b", re.IGN
 # A numbered or bulleted item under that heading.
 _LISTED = re.compile(r"^(?:\(?(\d{1,2})[.)]|[-*•])\s+(.+)$")
 
+# The sentence that introduces the list, which is not itself an outcome.
+_LEAD_IN = re.compile(
+    r"\b(will|should|shall)\s+be\s+able\s+to\b|\b(on|upon|after)\s+(completion|completing)\b",
+    re.IGNORECASE,
+)
+
+# A line that continues the one before it rather than starting a new outcome: a wrapped clause, or
+# the assessment tag many syllabi put after each outcome.
+_TAG_ONLY = re.compile(r"^\(?[A-Z]{2,5}\)?[.,;]?$")
+_ENDS_OPEN = re.compile(r"[,;:]$|\b(and|or|the|a|an|of|to|in|for|using|with|their)$", re.IGNORECASE)
+
 # A line that ends the outcome block: another section heading, or a table header.
 _SECTION_END = re.compile(
     r"\b(syllabus|unit\s+[ivx\d]|text\s*books?|reference|evaluation|assessment|"
@@ -115,6 +126,52 @@ def _listed(lines: list[str]) -> list[ExtractedOutcome]:
     return out
 
 
+def _strip_tag(text: str) -> str:
+    """Drop a trailing assessment marker such as "(MST)" or "(EST)". It says when the outcome
+    is examined, not what it is, and it would otherwise end up inside every blueprint row."""
+    return _clean(re.sub(r"\s*[(\[]?\b[A-Z]{2,5}\b[)\]]?[.]?$", "", text))
+
+
+def _unmarked(lines: list[str]) -> list[ExtractedOutcome]:
+    """Outcomes under a heading that carry no label and no number of their own.
+
+    The numbering in a syllabus like "1. Analyze ... (MST)" is a list marker, and the PDF parser
+    strips list markers before anything here sees the text — so by the time the document reaches
+    this module its outcomes look like bare sentences under a heading. That is the commonest real
+    syllabus and it used to extract nothing at all.
+
+    Without a marker the only evidence is position: after the outcomes heading, before the next
+    section, and not the "students will be able to" sentence that introduces them. Reported at the
+    same confidence as a listed outcome, because the coordinator has to check it either way.
+    """
+    start = next((i for i, line in enumerate(lines) if _HEADING.search(line)), None)
+    if start is None:
+        return []
+    out: list[ExtractedOutcome] = []
+    for line in lines[start + 1:]:
+        if _SECTION_END.search(line):
+            break
+        if _LEAD_IN.search(line):
+            continue
+        joins = out and (
+            line[:1].islower()
+            or line.startswith("(")
+            or _TAG_ONLY.match(line)
+            or _ENDS_OPEN.search(out[-1].text)
+        )
+        if joins:
+            merged = _clean(f"{out[-1].text} {line}")
+            out[-1] = ExtractedOutcome(out[-1].code, merged, out[-1].confidence)
+            continue
+        body = _clean(line)
+        if len(body.split()) < MIN_WORDS:
+            if out:
+                out[-1] = ExtractedOutcome(out[-1].code, _clean(f"{out[-1].text} {body}"), out[-1].confidence)
+            continue
+        out.append(ExtractedOutcome(f"CO{len(out) + 1}", body, LISTED_CONFIDENCE))
+    return [ExtractedOutcome(o.code, _strip_tag(o.text), o.confidence) for o in out]
+
+
 def extract_outcomes(text: str) -> list[ExtractedOutcome]:
     """Course outcomes read off a syllabus, best-effort and never silently.
 
@@ -126,6 +183,8 @@ def extract_outcomes(text: str) -> list[ExtractedOutcome]:
     found = _labelled(chr(10).join(lines))
     if not found:
         found = _listed(lines)
+    if not found:
+        found = _unmarked(lines)
 
     # One row per code, keeping the first: a syllabus often repeats its outcomes in a mapping table
     # further down, usually abbreviated.

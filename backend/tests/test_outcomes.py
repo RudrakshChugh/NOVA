@@ -34,6 +34,47 @@ Text Books
 """
 
 
+# A real UCS503 syllabus, after the PDF parser has had it. The numbering a reader sees ("1.
+# Analyze ...") is a list marker, and the parser strips list markers, so by the time the extractor
+# runs there is nothing marking these lines as outcomes except the heading above them. Reported
+# from the field: this shape used to extract nothing at all.
+UNMARKED = """
+Course Learning Outcomes (CLOs) / Course Objectives (COs):
+On completion of this course, the students will be able to
+Analyze software development process models for software development life cycle.
+(MST)
+Elicit, describe, and evaluate a system's requirements and analyze them using various
+UML models.
+(MST)
+Demonstrate the use of design principles in designing data, architecture, user, and component-level design.
+(EST)
+Text Books:
+Pressman R.S., Software Engineering: A Practitioner's Approach.
+"""
+
+
+def test_an_unmarked_list_under_a_heading_is_read():
+    found = extract_outcomes(UNMARKED)
+    assert [o.code for o in found] == ["CO1", "CO2", "CO3"]
+    # Position is the only evidence, so every row is flagged for checking.
+    assert all(o.confidence == 0.5 for o in found)
+    assert found[0].text.startswith("Analyze software development process models")
+    # the sentence that introduces the list is not one of them
+    assert not any("will be able to" in o.text for o in found)
+    # a wrapped tail belongs to the outcome above it rather than becoming its own row
+    assert found[1].text.endswith("various UML models")
+    # the assessment marker says when it is examined, not what it is
+    assert not any("MST" in o.text or "EST" in o.text for o in found)
+    # the list ends where the next section begins
+    assert not any("Pressman" in o.text for o in found)
+
+
+def test_a_labelled_syllabus_still_wins_over_the_unmarked_reading():
+    """A document that labels its outcomes has already said which lines they are."""
+    found = extract_outcomes(LABELLED)
+    assert all(o.confidence == 1.0 for o in found)
+
+
 def test_a_labelled_syllabus_is_read_at_full_confidence():
     found = extract_outcomes(LABELLED)
     assert [o.code for o in found] == ["CO1", "CO2", "CO3", "CO4"]
