@@ -162,6 +162,63 @@ def test_the_paper_prints_as_a_pdf_and_the_answer_key_is_separate(client, publis
     assert len(key.content) > len(r.content)
 
 
+def test_the_printed_paper_carries_no_outcome_or_bloom_column(tmp_path):
+    """Those two columns are the setter's working. A candidate cannot use them, and printing them
+    on the question paper hands out the blueprint; they belong on the coordinator's copy.
+
+    Read back with pypdf rather than by searching the bytes, because the text in a PDF is
+    compressed and a raw search silently passes whatever it is given. The project's own parse_pdf
+    is the wrong tool here: it drops fragments too short to be sentences, which is exactly what a
+    column heading and a "CO2" cell are."""
+    from pypdf import PdfReader
+
+    from app.services.paper_pdf import render
+
+    snapshot = {
+        "title": "Mid Semester", "total_marks": 3,
+        "items": [{
+            "number": 1, "part": None, "marks": 3, "stem": "Draw the level-0 data flow diagram.",
+            "answer_key": "A single process with its external entities.",
+            "course_outcome": "CO2 Elicit and model requirements", "bloom_level": "apply",
+        }],
+    }
+
+    def text_of(data: bytes, name: str) -> str:
+        path = tmp_path / name
+        path.write_bytes(data)
+        return chr(10).join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
+
+    paper = text_of(render(snapshot, with_answers=False), "paper.pdf")
+    key = text_of(render(snapshot, with_answers=True), "key.pdf")
+
+    assert "Draw the level-0 data flow diagram." in paper   # the question is still on it
+    assert "Marks" in paper                                 # and so is what it is worth
+    assert "CO2" not in paper                               # but not the outcome it maps to
+    assert "L3" not in paper                                # nor the Bloom level
+    # The coordinator's copy keeps both, which is what an accreditation file wants.
+    assert "CO2" in key and "L3" in key
+
+
+def test_a_paper_may_take_questions_from_more_than_one_blueprint_version(client, published):
+    """A subject accumulates published questions across every version it freezes, and a paper is
+    drawn from the bank rather than from one version of the plan."""
+    course_id = published["course_id"]
+    coordinator = published["coordinator"]
+
+    entries = client.get(f"/bank/entries?course_id={course_id}", headers=coordinator).json()
+    assert entries, "the fixture publishes at least one question"
+
+    paper = client.post(f"/courses/{course_id}/papers", headers=coordinator,
+                        json={"title": "Across versions"}).json()
+    assert paper["items"] == []                  # started empty, with no blueprint named
+
+    rows = [{"entry_id": e["entry_id"], "number": i + 1, "part": None,
+             "marks": e["snapshot"]["constraint"]["marks"]} for i, e in enumerate(entries)]
+    r = client.put(f"/papers/{paper['paper_id']}/items", headers=coordinator, json=rows)
+    assert r.status_code == 200
+    assert len(r.json()["items"]) == len(entries)
+
+
 def test_a_reviewer_may_print_the_paper_but_not_the_answer_key(client, published):
     """The one artefact here that must not reach a candidate."""
     coordinator = published["coordinator"]

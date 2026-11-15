@@ -131,16 +131,27 @@ def render(snapshot: dict, with_answers: bool = False) -> bytes:
         flow.append(Paragraph("<b>Answer key</b> — not for distribution to candidates.", INSTRUCTION))
         flow.append(Spacer(1, 6))
 
-    rows = [["Q No.", "Questions", "Marks", "CO", "BL"]]
+    # The outcome and Bloom columns are the setter's working, not the candidate's business: a
+    # student sitting the paper cannot use them, and printing them hands out the blueprint. They
+    # stay on the answer key, which is the coordinator's copy and the one an accreditation file
+    # wants.
+    mapping = with_answers
+    head = ["Q No.", "Questions", "Marks"] + (["CO", "BL"] if mapping else [])
+    rows = [head]
     for item in snapshot.get("items", []):
-        rows.append([
+        row = [
             Paragraph(f"<b>{_label(item)}</b>", CELL),
             _question_cell(item, with_answers),
             str(item.get("marks", "")),
-            _escape((item.get("course_outcome") or "").split(" ", 1)[0]),
-            BLOOM_LEVEL.get(item.get("bloom_level"), ""),
-        ])
-    table = Table(rows, colWidths=[16 * mm, 113 * mm, 14 * mm, 14 * mm, 13 * mm], repeatRows=1)
+        ]
+        if mapping:
+            row += [
+                _escape((item.get("course_outcome") or "").split(" ", 1)[0]),
+                BLOOM_LEVEL.get(item.get("bloom_level"), ""),
+            ]
+        rows.append(row)
+    widths = ([16, 113, 14, 14, 13] if mapping else [16, 140, 14])
+    table = Table(rows, colWidths=[w * mm for w in widths], repeatRows=1)
     table.setStyle(GRID)
     flow.append(table)
 
