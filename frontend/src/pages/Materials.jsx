@@ -379,15 +379,18 @@ function CourseOutcomes({ course, canUpload }) {
   const editing = draft || rows
   const setField = (i, key, value) => {
     const next = editing.map((r, j) => (j === i ? { ...r, [key]: value } : r))
-    (draft ? setDraft : setRows)(next)
+    if (draft) setDraft(next)
+    else setRows(next)
   }
   const removeRow = (i) => {
     const next = editing.filter((_, j) => j !== i)
-    (draft ? setDraft : setRows)(next)
+    if (draft) setDraft(next)
+    else setRows(next)
   }
   const addRow = () => {
     const next = [...editing, { code: `CO${editing.length + 1}`, text: '', confidence: null }]
-    (draft ? setDraft : setRows)(next)
+    if (draft) setDraft(next)
+    else setRows(next)
   }
 
   const unsure = editing.filter((r) => r.confidence != null && r.confidence < 1).length
