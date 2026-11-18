@@ -25,6 +25,7 @@ function TemplateCard({ course, canEdit }) {
           institution: form.institution || '', department: form.department || '',
           exam_name: form.exam_name || '', instructions: form.instructions || '',
           duration_minutes: form.duration_minutes ? Number(form.duration_minutes) : null,
+          print_mapping: !!form.print_mapping,
         },
       })
       setForm(saved)
@@ -69,6 +70,11 @@ function TemplateCard({ course, canEdit }) {
                   placeholder="Answer all questions. Assume any missing data."
                   onChange={(e) => set('instructions', e.target.value)} />
       </Field>
+      <label className="field inline">
+        <input type="checkbox" checked={!!form.print_mapping} disabled={!canEdit}
+               onChange={(e) => set('print_mapping', e.target.checked)} />
+        <span>Print the CO and BL columns on the candidates’ paper, as the institute’s papers do</span>
+      </label>
       {error && <Note tone="bad">{error}</Note>}
       {canEdit && <div className="row"><Btn variant="primary" icon="check" busy={busy} onClick={save}>Save header</Btn></div>}
     </Card>

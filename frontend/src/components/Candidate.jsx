@@ -48,24 +48,62 @@ function Checklist({ comp }) {
   )
 }
 
+// What a draft was nearest to. A repeat is not only a repeat of a past paper: it can be of
+// another question on the same paper, or of one already published.
+const SOURCE_COPY = {
+  pyq: { a: 'a past-year question', closest: 'Closest past-year question' },
+  run: { a: 'another question on this paper', closest: 'Closest question on this paper' },
+  bank: { a: 'a question already in the bank', closest: 'Closest question in the bank' },
+}
+const COMPARED_WITH = 'past papers, the question bank and the other questions of this run'
+
+/** Duplicate probability as an arc, with the flagging threshold marked on it. */
+function Dial({ value, threshold, tone }) {
+  const r = 46
+  const c = 2 * Math.PI * r
+  const v = Math.max(0, Math.min(1, value ?? 0))
+  const at = Math.max(0, Math.min(1, threshold ?? 0)) * 2 * Math.PI
+  return (
+    <div className={`dial ${tone}`} role="img" aria-label={`Duplicate probability ${v.toFixed(2)}, flagged at ${(threshold ?? 0).toFixed(2)}`}>
+      <svg width="108" height="108" viewBox="0 0 108 108">
+        <circle className="track" cx="54" cy="54" r={r} fill="none" strokeWidth="8" />
+        <circle className="fill" cx="54" cy="54" r={r} fill="none" strokeWidth="8" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - v)} />
+        <line className="tick" strokeWidth="2.5" strokeLinecap="round"
+          x1={54 + (r - 8) * Math.cos(at)} y1={54 + (r - 8) * Math.sin(at)}
+          x2={54 + (r + 8) * Math.cos(at)} y2={54 + (r + 8) * Math.sin(at)} />
+      </svg>
+      <div className="read"><div><b>{v.toFixed(2)}</b><span>duplicate</span></div></div>
+    </div>
+  )
+}
+
 function Novelty({ n }) {
   if (!n) {
     return (
       <Empty icon="papers" title="Nothing to compare against">
-        No past-year paper has been added for this course, so the novelty engine had no corpus.
+        No past-year paper has been added for this subject, the bank is empty and this was the
+        first question of its run — so there was nothing for the novelty engine to compare it with.
       </Empty>
     )
   }
   const fitted = !n.model_version.startsWith('untrained')
+  const source = n.nearest_source || (n.nearest_pyq ? 'pyq' : null)
+  const what = SOURCE_COPY[source] || SOURCE_COPY.pyq
+  const nearestText = n.nearest_text || n.nearest_pyq?.text
+  // Close to the line without crossing it: worth a reviewer's glance, not a flag.
+  const near = !n.is_duplicate && n.threshold > 0 && n.duplicate_probability >= n.threshold * 0.8
   return (
     <>
-      <div className="row">
-        {n.is_duplicate
-          ? <Badge tone="bad" dot>repeats a past-year question</Badge>
-          : <Badge tone="ok" dot>no past-year match</Badge>}
-        <span className="muted">
-          duplicate probability <strong>{n.duplicate_probability.toFixed(2)}</strong> · flagged at {n.threshold.toFixed(2)}
-        </span>
+      <div className="dial-row">
+        <Dial value={n.duplicate_probability} threshold={n.threshold} tone={n.is_duplicate ? 'bad' : near ? 'warn' : ''} />
+        <div className="dial-copy">
+          <h3>{n.is_duplicate ? `Repeats ${what.a}` : near ? `Close to ${what.a}` : 'New question'}</h3>
+          <p className="muted">
+            {n.is_duplicate
+              ? `Its duplicate probability is at or above the ${n.threshold.toFixed(2)} line, so it was sent back to be rewritten${source === 'pyq' ? '' : ` — it matched ${what.a}, not a past paper`}.`
+              : `Compared with ${COMPARED_WITH}. The nearest match scores ${n.duplicate_probability.toFixed(2)}; a draft is flagged at ${n.threshold.toFixed(2)}.`}
+          </p>
+        </div>
       </div>
 
       {!fitted && (
@@ -86,21 +124,74 @@ function Novelty({ n }) {
         ))}
       </Table>
 
-      {n.nearest_pyq && (
+      {nearestText && (
         <div className="passage">
           <div className="meta">
-            <strong>Closest past-year question</strong>
+            <strong>{what.closest}</strong>
             <span>
-              {n.nearest_paper}
-              {n.nearest_pyq.number ? ` · Q${n.nearest_pyq.number}` : ''}
-              {n.nearest_pyq.marks ? ` · ${n.nearest_pyq.marks} marks` : ''}
+              {source === 'pyq' || !source
+                ? <>
+                  {n.nearest_paper}
+                  {n.nearest_pyq?.number ? ` · Q${n.nearest_pyq.number}` : ''}
+                  {n.nearest_pyq?.marks ? ` · ${n.nearest_pyq.marks} marks` : ''}
+                </>
+                : n.nearest_label}
             </span>
           </div>
-          {n.nearest_pyq.text}
+          {nearestText}
         </div>
       )}
 
       <p className="muted">Scored by <span className="mono">{n.model_version}</span>.</p>
+    </>
+  )
+}
+
+/** What the answer key rests on. Each general statement it makes is shown with the sentence of
+ *  the course material found, word for word, behind it — or marked as having none. */
+function Evidence({ report }) {
+  if (!report) {
+    return (
+      <Empty icon="shield" title="No evidence check for this question">
+        It is made for written answers on normal runs. Multiple-choice keys and questions from
+        earlier runs do not have one.
+      </Empty>
+    )
+  }
+  const material = report.claims.filter((c) => c.kind === 'material')
+  const scenario = report.claims.filter((c) => c.kind === 'scenario')
+  const missing = report.material_total - report.material_verified
+  return (
+    <>
+      <div className="row">
+        {missing === 0
+          ? <Badge tone="ok" dot>{report.material_total === 0 ? 'no general statements to check' : `all ${report.material_total} statements found in the material`}</Badge>
+          : <Badge tone="warn" dot>{missing} of {report.material_total} statements not found in the material</Badge>}
+      </div>
+      <p className="muted">
+        A statement counts as backed only when the quoted sentence was found word for word in a
+        passage. This is evidence for you to read, not a verdict: it cannot tell whether the
+        sentence truly proves the statement, and it does not check the scenario the question invents.
+      </p>
+      {material.map((c, i) => (
+        <div key={i} className={`check ${c.verified ? 'ok' : 'bad'}`}>
+          <Icon name={c.verified ? 'check' : 'x'} size={15} />
+          <div>
+            <div className="f">{c.text}</div>
+            <div className="d">
+              {c.verified
+                ? <>{pageLabel(c.page_ref)}: “{c.quote}”</>
+                : 'No sentence of the material was found that states this. Check it before accepting.'}
+            </div>
+          </div>
+        </div>
+      ))}
+      {scenario.length > 0 && (
+        <p className="muted">
+          {plural(scenario.length, 'statement')} only describe the question’s own scenario and cannot be checked against the material.
+        </p>
+      )}
+      {report.checked_by && <p className="muted">Statements listed by <span className="mono">{report.checked_by}</span>; quotes verified by the program.</p>}
     </>
   )
 }
@@ -271,6 +362,11 @@ export default function Candidate({ q, canReview, onReviewed, blinded = false, s
     { value: 'checks', label: 'Blueprint checks', icon: 'shield', badge: violations || '✓', badgeTone: violations ? 'bad' : '' },
     { value: 'novelty', label: 'Novelty', icon: 'target', badge: q.novelty?.is_duplicate ? '!' : null, badgeTone: 'bad' },
     { value: 'sources', label: 'Sources', icon: 'papers', badge: q.citations.length },
+    {
+      value: 'evidence', label: 'Evidence', icon: 'eye',
+      badge: q.claim_check ? `${q.claim_check.material_verified}/${q.claim_check.material_total}` : null,
+      badgeTone: q.claim_check && q.claim_check.material_verified < q.claim_check.material_total ? 'bad' : '',
+    },
     { value: 'drafts', label: 'Draft history', icon: 'clock', badge: q.repair_attempts ? q.repair_attempts + 1 : null },
   ]
 
@@ -282,7 +378,8 @@ export default function Candidate({ q, canReview, onReviewed, blinded = false, s
           {comp?.is_compliant
             ? <Badge tone="ok" dot>all {comp.checks.length} checks passed</Badge>
             : <Badge tone="bad" dot>{violations} of {comp?.checks.length} checks failed</Badge>}
-          {q.novelty?.is_duplicate && <Badge tone="bad" dot>duplicate of a past paper</Badge>}
+          {q.novelty?.is_duplicate && <Badge tone="bad" dot>repeats {(SOURCE_COPY[q.novelty.nearest_source] || SOURCE_COPY.pyq).a}</Badge>}
+          {q.novelty && !q.novelty.is_duplicate && <Badge tone="brand" dot>new</Badge>}
           <Badge tone="outline">{q.repair_attempts === 0 ? 'first draft' : `after ${q.repair_attempts} repair${q.repair_attempts === 1 ? '' : 's'}`}</Badge>
           {q.review && (
             <Badge tone="brand" dot>
@@ -292,12 +389,12 @@ export default function Candidate({ q, canReview, onReviewed, blinded = false, s
           {q.state === 'published' && <Badge tone="ok" dot>published</Badge>}
         </div>
 
-        <div className="row tight" style={{ fontSize: 12 }}>
-          <span className="muted">{c.course_outcome}</span>
-          <span className="muted">·</span>
-          <span className="muted">{c.concept}</span>
-          <span className="muted">·</span>
-          <span className="muted cap">{c.bloom_level}, {c.marks} mark{c.marks === 1 ? '' : 's'}, {c.question_type.replace('_', ' ')}</span>
+        <div className="cand-meta">
+          <span><b>Outcome</b> {c.course_outcome}</span>
+          <span><b>Concept</b> {c.concept}</span>
+          <span className="cap"><b>Level</b> {c.bloom_level}</span>
+          <span><b>Marks</b> {c.marks}</span>
+          <span className="cap"><b>Type</b> {c.question_type.replace('_', ' ')}</span>
         </div>
 
         {body}
@@ -329,6 +426,7 @@ export default function Candidate({ q, canReview, onReviewed, blinded = false, s
                   {q.citations.map((ct) => <Passage key={ct.citation_id} c={ct} />)}
                 </>
             )}
+            {tab === 'evidence' && <div className="stack"><Evidence report={q.claim_check} /></div>}
             {tab === 'drafts' && <Drafts questionId={q.question_id} />}
           </div>
         </div>

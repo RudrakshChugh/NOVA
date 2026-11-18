@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import { api } from '../api'
 
-import { Badge, Btn, Card, Empty, Explainer, Note, PageHead, Stat, Table, useToast } from '../components/ui'
+import { Badge, Btn, Card, Empty, Explainer, Note, PageHead, Table, useToast } from '../components/ui'
 
 const BLOOM = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create']
 const TYPES = ['mcq', 'short_answer', 'long_answer', 'numerical']
@@ -63,7 +63,8 @@ export default function Blueprints({ course, user, go }) {
     await load(); select(bp)
     const v = await api(`/blueprints/${bp.blueprint_id}/validate`, { method: 'POST' })
     setValidation(v)
-    if (v.ok) toast('ok', 'Saved and valid', `${v.total_marks} marks across ${Object.keys(v.outcomes).length} outcome(s). Freeze it to lock the version.`)
+    if (v.ok && v.warnings?.length) toast('info', 'Saved — valid, with advisories', `${v.warnings.length} row(s) need a look. You can still freeze.`)
+    else if (v.ok) toast('ok', 'Saved and valid', `${v.total_marks} marks across ${Object.keys(v.outcomes).length} outcome(s). Freeze it to lock the version.`)
     else toast('bad', `${v.issues.length} validation issue(s)`, 'Fix them before freezing.')
   })
 
@@ -279,8 +280,41 @@ export default function Blueprints({ course, user, go }) {
                   </ul>
                 </Note>
               )}
-              <div className="stats">
-                {Object.entries(validation.outcomes).map(([o, m]) => <Stat key={o} label={o} value={`${m}`} hint="marks" />)}
+              {validation.warnings?.length > 0 && (
+                <Note tone="warn">
+                  <strong>{validation.warnings.length} thing{validation.warnings.length === 1 ? '' : 's'} to check</strong>
+                  {' '}— advisory, you can still freeze.
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {validation.warnings.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </Note>
+              )}
+              <div>
+                <h4 style={{ marginBottom: 'var(--s3)' }}>Marks by course outcome</h4>
+                <div className="coverage">
+                  {Object.entries(validation.outcomes).map(([o, m]) => {
+                    const [code, ...rest] = o.split(' ')
+                    return (
+                      <div key={o} className="cov-row" title={o}>
+                        <span className="code">{code}</span>
+                        <span className="progress"><i style={{ width: `${validation.total_marks ? (m / validation.total_marks) * 100 : 0}%` }} /></span>
+                        <span className="val">{m} mark{m === 1 ? '' : 's'}</span>
+                        <span className="name">{rest.join(' ')}</span>
+                      </div>
+                    )
+                  })}
+                  {validation.uncovered?.map((o) => {
+                    const [code, ...rest] = o.split(' ')
+                    return (
+                      <div key={o} className="cov-row none" title={o}>
+                        <span className="code">{code}</span>
+                        <span className="progress"><i style={{ width: 0 }} /></span>
+                        <span className="val">none</span>
+                        <span className="name">{rest.join(' ')}</span>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             </>
           )}
