@@ -252,6 +252,7 @@ def _snapshot(db: Session, paper: Paper) -> dict:
             "exam_name": template.exam_name if template else "",
             "duration_minutes": template.duration_minutes if template else None,
             "instructions": template.instructions if template else "",
+            "print_mapping": bool(template.print_mapping) if template else False,
         },
         "items": [
             {

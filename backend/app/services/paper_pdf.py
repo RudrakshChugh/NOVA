@@ -14,11 +14,12 @@ paper this system can read.
 from io import BytesIO
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.pdfgen import canvas as pdf_canvas
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 BLOOM_LEVEL = {
     "remember": "L1", "understand": "L2", "apply": "L3",
@@ -27,138 +28,212 @@ BLOOM_LEVEL = {
 
 _base = getSampleStyleSheet()
 
-# An Indian university question paper is set in Times, not in the Helvetica ReportLab
-# defaults to, and the screen that assembles it is set in Times for the same reason.
-SERIF, SERIF_BOLD = "Times-Roman", "Times-Bold"
-TITLE = ParagraphStyle("paper-title", parent=_base["Title"], fontName=SERIF_BOLD, fontSize=14, leading=18, spaceAfter=2)
-SUBTITLE = ParagraphStyle("paper-sub", parent=_base["Normal"], fontName=SERIF, fontSize=10.5, leading=14,
-                          alignment=TA_CENTER, spaceAfter=1)
-META = ParagraphStyle("paper-meta", parent=_base["Normal"], fontName=SERIF, fontSize=9.5, leading=13)
-INSTRUCTION = ParagraphStyle("paper-inst", parent=_base["Normal"], fontName=SERIF, fontSize=9, leading=12.5,
-                             textColor=colors.HexColor("#333333"))
-BODY = ParagraphStyle("paper-body", parent=_base["Normal"], fontName=SERIF, fontSize=10, leading=14)
-CELL = ParagraphStyle("paper-cell", parent=_base["Normal"], fontName=SERIF, fontSize=9, leading=12)
-ANSWER = ParagraphStyle("paper-answer", parent=_base["Normal"], fontName=SERIF, fontSize=9.5, leading=13,
-                        textColor=colors.HexColor("#1f4e79"))
+# An Indian university question paper is set in Times and ruled in black. The layout below is
+# the one the institute's own papers use — roll-number box, institution and department centred,
+# a two-column block for the examination and the course, the note to candidates, then one ruled
+# table of questions — so a paper printed here sits in a file next to hand-set ones without
+# looking like it came from somewhere else.
+SERIF, SERIF_BOLD, SERIF_ITALIC = "Times-Roman", "Times-Bold", "Times-Italic"
+INK = colors.black
+WIDTH = 174 * mm  # A4 less 18 mm margins
 
-HEADER_RULE = TableStyle([
-    ("LINEBELOW", (0, 0), (-1, -1), 0.75, colors.HexColor("#444444")),
-])
+INSTITUTION = ParagraphStyle("paper-inst-name", parent=_base["Normal"], fontName=SERIF_BOLD, fontSize=14.5,
+                             leading=18, alignment=TA_CENTER)
+DEPARTMENT = ParagraphStyle("paper-dept", parent=_base["Normal"], fontName=SERIF_BOLD, fontSize=11.5,
+                            leading=15, alignment=TA_CENTER)
+META = ParagraphStyle("paper-meta", parent=_base["Normal"], fontName=SERIF, fontSize=10.5, leading=14)
+NOTE = ParagraphStyle("paper-note", parent=_base["Normal"], fontName=SERIF, fontSize=10.5, leading=14)
+HEAD = ParagraphStyle("paper-head", parent=_base["Normal"], fontName=SERIF_BOLD, fontSize=10.5, leading=13,
+                      alignment=TA_CENTER)
+BODY = ParagraphStyle("paper-body", parent=_base["Normal"], fontName=SERIF, fontSize=11, leading=15,
+                      alignment=TA_JUSTIFY)
+OPTION = ParagraphStyle("paper-option", parent=_base["Normal"], fontName=SERIF, fontSize=11, leading=15)
+CELL = ParagraphStyle("paper-cell", parent=_base["Normal"], fontName=SERIF, fontSize=11, leading=15,
+                      alignment=TA_CENTER)
+QNO = ParagraphStyle("paper-qno", parent=CELL, fontName=SERIF_BOLD)
+ANSWER = ParagraphStyle("paper-answer", parent=_base["Normal"], fontName=SERIF, fontSize=10, leading=13.5,
+                        alignment=TA_JUSTIFY, textColor=colors.HexColor("#1a1a1a"))
+BANNER = ParagraphStyle("paper-banner", parent=_base["Normal"], fontName=SERIF_BOLD, fontSize=10.5, leading=14,
+                        alignment=TA_CENTER)
 
 GRID = TableStyle([
-    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#999999")),
+    ("GRID", (0, 0), (-1, -1), 0.7, INK),
     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ededed")),
-    ("FONTNAME", (0, 0), (-1, 0), SERIF_BOLD),
-    ("FONTSIZE", (0, 0), (-1, 0), 9),
-    ("ALIGN", (2, 0), (-1, -1), "CENTER"),
+    ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
     ("LEFTPADDING", (0, 0), (-1, -1), 5),
     ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-    ("TOPPADDING", (0, 0), (-1, -1), 4),
-    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ("TOPPADDING", (0, 0), (-1, -1), 5),
+    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
 ])
+
+# The standard Times face has no glyph for these, and prints a black box in their place. A
+# model writes them freely ("data‑flow diagram"), so they are mapped before anything is drawn.
+_UNPRINTABLE = {
+    "\u2011": "-", "\u2010": "-", "\u2012": "-", "\u2212": "-", "\u00ad": "",
+    "\u202f": " ", "\u2009": " ", "\u200a": " ", "\u2007": " ", "\u00a0": " ", "\u200b": "",
+    "\u2192": "->", "\u2264": "<=", "\u2265": ">=", "\u2260": "!=", "\u00d7": "x",
+}
 
 
 def _escape(text: str) -> str:
-    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    text = text or ""
+    for bad, good in _UNPRINTABLE.items():
+        text = text.replace(bad, good)
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
 
 
 def _label(item: dict) -> str:
     return f"Q{item['number']}{item.get('part') or ''}"
 
 
+def _duration(minutes: int | None) -> str:
+    if not minutes:
+        return ""
+    hours, rest = divmod(int(minutes), 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} Hour{'s' if hours != 1 else ''}")
+    if rest:
+        parts.append(f"{rest} Minutes")
+    return " ".join(parts)
+
+
 def _question_cell(item: dict, with_answer: bool) -> list:
     flow: list = [Paragraph(_escape(item["stem"]), BODY)]
-    for index, option in enumerate(item.get("options") or []):
-        flow.append(Paragraph(f"({chr(97 + index)}) {_escape(option)}", CELL))
+    options = item.get("options") or []
+    if options:
+        # Two to a row, as a printed objective question sets them, unless one is too long to
+        # share a line.
+        labelled = [Paragraph(f"({chr(97 + i)}) {_escape(o)}", OPTION) for i, o in enumerate(options)]
+        if max(len(o) for o in options) <= 38:
+            rows = [labelled[i:i + 2] + [""] * (2 - len(labelled[i:i + 2])) for i in range(0, len(labelled), 2)]
+            grid = Table(rows, colWidths=["50%", "50%"])
+            grid.setStyle(TableStyle([
+                ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            flow += [Spacer(1, 2), grid]
+        else:
+            flow += [Spacer(1, 2)] + labelled
     if with_answer:
-        flow.append(Spacer(1, 3))
+        flow.append(Spacer(1, 5))
         flow.append(Paragraph(f"<b>Answer.</b> {_escape(item['answer_key'])}", ANSWER))
     return flow
 
 
 def _header(snapshot: dict) -> list:
     template = snapshot.get("template") or {}
-    out: list = []
-    if template.get("institution"):
-        out.append(Paragraph(_escape(template["institution"]), TITLE))
-    if template.get("department"):
-        out.append(Paragraph(_escape(template["department"]), SUBTITLE))
     course = snapshot.get("course") or {}
-    title_line = " — ".join(x for x in (course.get("code"), course.get("title")) if x)
-    if title_line:
-        out.append(Paragraph(_escape(title_line), SUBTITLE))
-    if template.get("exam_name"):
-        out.append(Paragraph(f"<b>{_escape(template['exam_name'])}</b>", SUBTITLE))
-    out.append(Spacer(1, 6))
+    out: list = []
 
-    left = []
-    if snapshot.get("exam_date"):
-        left.append(f"Date: {_escape(snapshot['exam_date'])}")
-    if template.get("duration_minutes"):
-        left.append(f"Duration: {template['duration_minutes']} minutes")
-    right = [f"Maximum marks: {snapshot.get('total_marks', 0)}"]
-    meta = Table(
-        [[Paragraph("<br/>".join(left), META), Paragraph("<br/>".join(right), META)]],
-        colWidths=[105 * mm, 65 * mm],
-    )
-    meta.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.75, colors.HexColor("#444444")),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    roll = Table([[Paragraph("Roll Number:", META), ""]], colWidths=[24 * mm, 46 * mm], hAlign="LEFT")
+    roll.setStyle(TableStyle([
+        ("BOX", (1, 0), (1, 0), 0.7, INK), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (0, 0), 0), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
-    out.append(meta)
-    out.append(Spacer(1, 8))
+    out += [roll, Spacer(1, 6)]
+
+    if template.get("institution"):
+        out.append(Paragraph(_escape(template["institution"]), INSTITUTION))
+    if template.get("department"):
+        out.append(Paragraph(_escape(template["department"]), DEPARTMENT))
+    out.append(Spacer(1, 5))
+
+    # Examination on the left, course on the right; time and marks under them. Empty cells are
+    # simply left out, so a subject with no template still prints a tidy block.
+    exam = " \u2013 ".join(x for x in (template.get("exam_name"), snapshot.get("exam_date")) if x) \
+        or (snapshot.get("title") or "")
+    time = _duration(template.get("duration_minutes"))
+    cells = [
+        [f"<b>{_escape(exam)}</b>" if exam else "", f"Course Code: <b>{_escape(course.get('code') or '')}</b>" if course.get("code") else ""],
+        [f"Time: {time}" if time else "", f"Course Name: <b>{_escape(course.get('title') or '')}</b>" if course.get("title") else ""],
+        ["", f"Maximum Marks: <b>{snapshot.get('total_marks', 0)}</b>"],
+    ]
+    if not time:  # keep marks on the left when there is no duration to put there
+        cells[1][0], cells = f"Maximum Marks: <b>{snapshot.get('total_marks', 0)}</b>", cells[:2]
+    cells = [row for row in cells if any(row)]
+    block = Table([[Paragraph(a, META), Paragraph(b, META)] for a, b in cells], colWidths=[WIDTH * 0.5, WIDTH * 0.5])
+    block.setStyle(TableStyle([
+        ("LINEABOVE", (0, 0), (-1, 0), 1.2, INK), ("LINEBELOW", (0, -1), (-1, -1), 1.2, INK),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, 0), 5), ("BOTTOMPADDING", (0, -1), (-1, -1), 5),
+    ]))
+    out += [block, Spacer(1, 6)]
     if template.get("instructions"):
-        out.append(Paragraph(f"<b>Instructions.</b> {_escape(template['instructions'])}", INSTRUCTION))
-        out.append(Spacer(1, 8))
+        out.append(Paragraph(f"<b>Note:</b> {_escape(template['instructions'])}", NOTE))
+        out.append(Spacer(1, 7))
     return out
 
 
+class _Numbered(pdf_canvas.Canvas):
+    """"Page 2 of 3" needs the total, which is only known once every page has been laid out, so
+    pages are held back and the footer drawn on each at the end."""
+
+    def __init__(self, *args, footer: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pages: list[dict] = []
+        self._footer = footer
+
+    def showPage(self):
+        self._pages.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total = len(self._pages)
+        for state in self._pages:
+            self.__dict__.update(state)
+            self.setFont(SERIF, 9)
+            self.setFillColor(colors.HexColor("#333333"))
+            self.drawString(18 * mm, 10 * mm, self._footer)
+            self.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Page {self._pageNumber} of {total}")
+            super().showPage()
+        super().save()
+
+
 def render(snapshot: dict, with_answers: bool = False) -> bytes:
-    """The paper as PDF bytes. `with_answers` renders the answer key alongside each question."""
+    """The paper as PDF bytes. `with_answers` renders the marking scheme alongside each question."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=A4,
-        leftMargin=20 * mm, rightMargin=20 * mm, topMargin=16 * mm, bottomMargin=16 * mm,
+        leftMargin=18 * mm, rightMargin=18 * mm, topMargin=14 * mm, bottomMargin=17 * mm,
         title=snapshot.get("title") or "Question paper",
     )
     flow = _header(snapshot)
     if with_answers:
-        flow.append(Paragraph("<b>Answer key</b> — not for distribution to candidates.", INSTRUCTION))
-        flow.append(Spacer(1, 6))
+        banner = Table([[Paragraph("MARKING SCHEME AND ANSWER KEY \u2013 not for distribution to candidates", BANNER)]], colWidths=[WIDTH])
+        banner.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.7, INK), ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eeeeee")),
+                                    ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+        flow += [banner, Spacer(1, 7)]
 
-    # The outcome and Bloom columns are the setter's working, not the candidate's business: a
-    # student sitting the paper cannot use them, and printing them hands out the blueprint. They
-    # stay on the answer key, which is the coordinator's copy and the one an accreditation file
-    # wants.
-    mapping = with_answers
-    head = ["Q No.", "Questions", "Marks"] + (["CO", "BL"] if mapping else [])
-    rows = [head]
+    # The outcome and Bloom columns are the setter's working. By default they stay off the
+    # candidate's paper and on the coordinator's copy, which is the one an accreditation file
+    # wants. Some institutes print them on the paper itself — the past papers this subject was
+    # tested with do — so the subject's template can switch them on.
+    template = snapshot.get("template") or {}
+    mapping = with_answers or bool(template.get("print_mapping"))
+    head = ["Q. No.", "Questions", "Marks"] + (["CO", "BL"] if mapping else [])
+    rows: list = [[Paragraph(h, HEAD) for h in head]]
     for item in snapshot.get("items", []):
         row = [
-            Paragraph(f"<b>{_label(item)}</b>", CELL),
+            Paragraph(_label(item), QNO),
             _question_cell(item, with_answers),
-            str(item.get("marks", "")),
+            Paragraph(str(item.get("marks", "")), CELL),
         ]
         if mapping:
             row += [
-                _escape((item.get("course_outcome") or "").split(" ", 1)[0]),
-                BLOOM_LEVEL.get(item.get("bloom_level"), ""),
+                Paragraph(_escape((item.get("course_outcome") or "").split(" ", 1)[0]), CELL),
+                Paragraph(BLOOM_LEVEL.get(item.get("bloom_level"), ""), CELL),
             ]
         rows.append(row)
-    widths = ([16, 113, 14, 14, 13] if mapping else [16, 140, 14])
+    widths = [15, 116, 15, 14, 14] if mapping else [15, 143, 16]
     table = Table(rows, colWidths=[w * mm for w in widths], repeatRows=1)
     table.setStyle(GRID)
     flow.append(table)
 
-    flow.append(Spacer(1, 10))
-    flow.append(KeepTogether(Paragraph(
-        f"Total: {snapshot.get('total_marks', 0)} marks over "
-        f"{len(snapshot.get('items', []))} question(s).", META,
-    )))
-    doc.build(flow)
+    course = snapshot.get("course") or {}
+    footer = " \u2013 ".join(x for x in (course.get("code"), template.get("exam_name") or snapshot.get("title")) if x)
+    doc.build(flow, canvasmaker=lambda *a, **k: _Numbered(*a, footer=footer, **k))
     return buffer.getvalue()
