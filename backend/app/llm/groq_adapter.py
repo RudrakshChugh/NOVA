@@ -11,7 +11,7 @@ import time
 import httpx
 
 from ..config import settings
-from .base import GenerationRequest, GenerationResult, LLMAdapter
+from .base import GenerationRequest, GenerationResult, LLMAdapter, MalformedOutput, parse_json_object
 
 # A free tier limits requests per minute, and one question can take four calls, so a run of any
 # size will meet a 429. Losing a whole run to one is not acceptable when waiting a few seconds
@@ -104,11 +104,18 @@ class GroqAdapter(LLMAdapter):
         if req.seed is not None:
             payload["seed"] = req.seed
         r = self._post(payload)
-        body = r.json()
-        data = json.loads(body["choices"][0]["message"]["content"])
+        try:
+            body = r.json()
+            choice = body["choices"][0]
+            content = choice["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            raise MalformedOutput(f"Groq reply had no message content: {r.text[:120]!r}") from e
+        if choice.get("finish_reason") == "length":
+            raise MalformedOutput("Groq stopped at the token limit before the JSON was complete")
+        data = parse_json_object(content, "Groq")
         missing = [k for k in required if k not in data]
         if missing:
-            raise RuntimeError(f"Groq returned JSON missing {', '.join(missing)}")
+            raise MalformedOutput(f"Groq returned JSON missing {', '.join(missing)}")
         return GenerationResult(
             data=data,
             model_version=body.get("model", self.model),

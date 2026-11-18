@@ -1,11 +1,11 @@
 """Self-hosted open-weight adapter (local Ollama server, JSON-schema constrained output)."""
 
-import json
-
 import httpx
 
 from ..config import settings
-from .base import GenerationRequest, GenerationResult, LLMAdapter, access_headers
+from .base import (
+    GenerationRequest, GenerationResult, LLMAdapter, MalformedOutput, access_headers, parse_json_object,
+)
 
 
 class OllamaAdapter(LLMAdapter):
@@ -36,10 +36,16 @@ class OllamaAdapter(LLMAdapter):
             raise RuntimeError(f"Ollama error {e.response.status_code}: {e.response.text[:200]}") from e
         except httpx.HTTPError as e:
             raise RuntimeError(f"Ollama unreachable at {self.url}: {e}") from e
-        body = r.json()
+        try:
+            body = r.json()
+            content = body["message"]["content"]
+        except (ValueError, KeyError, TypeError) as e:
+            raise MalformedOutput(f"Ollama reply had no message content: {r.text[:120]!r}") from e
+        if body.get("done_reason") == "length":
+            raise MalformedOutput("Ollama stopped at the token limit before the JSON was complete")
         return GenerationResult(
-            data=json.loads(body["message"]["content"]),
-            model_version=body["model"],
+            data=parse_json_object(content, "Ollama"),
+            model_version=body.get("model", self.model),
             temperature=req.temperature,
             seed=req.seed,
         )

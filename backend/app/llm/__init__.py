@@ -1,9 +1,11 @@
 from functools import lru_cache
 
 from ..config import settings
-from .base import GenerationRequest, GenerationResult, LLMAdapter
+from .base import GenerationRequest, GenerationResult, LLMAdapter, MalformedOutput
 
-__all__ = ["GenerationRequest", "GenerationResult", "LLMAdapter", "adapter_for", "get_adapter"]
+__all__ = [
+    "GenerationRequest", "GenerationResult", "LLMAdapter", "MalformedOutput", "adapter_for", "get_adapter",
+]
 
 
 def _build(name: str) -> LLMAdapter:

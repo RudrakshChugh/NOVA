@@ -1,11 +1,9 @@
 """Hosted API adapter (Anthropic Messages API, structured JSON output)."""
 
-import json
-
 import anthropic
 
 from ..config import settings
-from .base import GenerationRequest, GenerationResult, LLMAdapter
+from .base import GenerationRequest, GenerationResult, LLMAdapter, MalformedOutput, parse_json_object
 
 
 class AnthropicAdapter(LLMAdapter):
@@ -34,7 +32,12 @@ class AnthropicAdapter(LLMAdapter):
 
         if response.stop_reason == "refusal":
             raise RuntimeError("LLM refused the request")
-        text = next(b.text for b in response.content if b.type == "text")
+        if response.stop_reason == "max_tokens":
+            raise MalformedOutput("the model stopped at the token limit before the JSON was complete")
+        text = next((b.text for b in response.content if b.type == "text"), None)
+        if text is None:
+            raise MalformedOutput("the model returned no text block")
         return GenerationResult(
-            data=json.loads(text), model_version=response.model, temperature=None, seed=None
+            data=parse_json_object(text, "Anthropic"), model_version=response.model,
+            temperature=None, seed=None,
         )
