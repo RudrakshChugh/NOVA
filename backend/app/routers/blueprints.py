@@ -10,6 +10,8 @@ from ..db import get_db
 from ..models import Blueprint, BlueprintConstraint, CourseOutcome, User
 from ..schemas import BlueprintOut, ConstraintIn, ValidationOut
 from ..scoping import COORDINATOR, require_blueprint, require_course
+from ..config import settings
+from ..services import compliance, orchestrator
 
 router = APIRouter(tags=["blueprints"])
 
@@ -20,6 +22,74 @@ def _out(db: Session, bp: Blueprint) -> BlueprintOut:
     if bp.revised_from is not None:
         parent = db.get(Blueprint, bp.revised_from)
         out.revised_from_version = parent.version if parent else None
+    return out
+
+
+def level_warnings(constraints) -> list[str]:
+    """Rows that ask for more than the outcome they assess is stated at.
+
+    An outcome written as "Explain ..." commits the course to comprehension. A row that assesses
+    it at `create` is examining something the outcome never promised, which is the commonest way
+    a paper drifts from its outcomes while every row still names one. The level of an outcome is
+    read from its leading verb with the same classifier the compliance check uses on questions.
+
+    Advisory only. A coordinator may have a reason, an outcome may open with a verb the
+    classifier does not know, and a row *below* its outcome's level is ordinary — a paper needs
+    recall questions on outcomes stated higher up.
+    """
+    out: list[str] = []
+    for c in constraints:
+        stated = compliance.outcome_bloom_level(c.course_outcome)
+        if stated is None or c.bloom_level not in compliance.BLOOM_CUES:
+            continue
+        if compliance.bloom_rank(c.bloom_level) > compliance.bloom_rank(stated):
+            code = c.course_outcome.split()[0] if c.course_outcome.split() else "its outcome"
+            out.append(
+                f"Row {c.position + 1} is set at \u201c{c.bloom_level}\u201d, but {code} is stated at "
+                f"\u201c{stated}\u201d. The question would examine more than the outcome commits to."
+            )
+    return out
+
+
+def twin_warnings(constraints) -> list[str]:
+    """Rows that ask for the same thing twice.
+
+    Measured on real runs: two rows with the same outcome, concept and Bloom level reliably come
+    back as one task set in two scenarios ("identify the entities and flows of a Level-0 DFD"
+    for a bookstore, then for a library). The wording differs enough that the duplicate score
+    stays under the line, so nothing downstream catches it. The remedy is in the blueprint —
+    a narrower concept or a different level on one of the rows — which is why it is said here.
+    """
+    seen: dict[tuple, int] = {}
+    out: list[str] = []
+    for c in constraints:
+        key = (c.outcome_id or c.course_outcome.strip().lower(), c.concept.strip().lower(), c.bloom_level)
+        if key in seen:
+            out.append(
+                f"Rows {seen[key] + 1} and {c.position + 1} share an outcome, a concept (\u201c{c.concept}\u201d) "
+                "and a Bloom level. Each will be given a different form of task and a different "
+                "share of the passages, but a narrower concept on one of them makes a better paper."
+            )
+        else:
+            seen[key] = c.position
+    return out
+
+
+def coverage_warnings(db: Session, bp: Blueprint) -> list[str]:
+    """Rows whose concept the indexed material does not cover.
+
+    Said here, while the blueprint can still be changed, rather than discovered when a run skips
+    the row. Silent when nothing is indexed yet: that is a different problem with its own
+    message, and a warning on every row would bury it."""
+    out: list[str] = []
+    for c in bp.constraints:
+        score = orchestrator.coverage(db, bp.course_id, c)
+        if orchestrator.is_uncovered(score):
+            out.append(
+                f"Row {c.position + 1}: the course material has little on \u201c{c.concept}\u201d "
+                f"(best match {score:.2f}, needs {settings.retrieval_min_similarity:.2f}). "
+                "A run will skip this row rather than invent a question."
+            )
     return out
 
 
@@ -50,6 +120,7 @@ def _validate(db: Session, bp: Blueprint) -> ValidationOut:
     return ValidationOut(
         ok=not issues, issues=issues, total_marks=sum(outcomes.values()),
         outcomes=outcomes, uncovered=uncovered,
+        warnings=level_warnings(bp.constraints) + twin_warnings(bp.constraints) + coverage_warnings(db, bp),
     )
 
 

@@ -36,6 +36,11 @@ SCHEMA_PATCHES = (
     "REFERENCES blueprints(blueprint_id)",
     "ALTER TABLE materials ADD COLUMN IF NOT EXISTS content_hash TEXT",
     "ALTER TABLE generation_runs ADD COLUMN IF NOT EXISTS suggestion TEXT",
+    "ALTER TABLE novelty_reports ADD COLUMN IF NOT EXISTS nearest_source TEXT",
+    "ALTER TABLE novelty_reports ADD COLUMN IF NOT EXISTS nearest_text TEXT",
+    "ALTER TABLE novelty_reports ADD COLUMN IF NOT EXISTS nearest_label TEXT",
+    "ALTER TABLE candidate_questions ADD COLUMN IF NOT EXISTS claim_check JSONB",
+    "ALTER TABLE paper_templates ADD COLUMN IF NOT EXISTS print_mapping BOOLEAN NOT NULL DEFAULT false",
 )
 
 

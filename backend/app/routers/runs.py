@@ -47,6 +47,8 @@ def novelty_out(r: NoveltyReport) -> NoveltyOut:
         signals=[NoveltySignalOut(name=s.name, value=s.value, weight=s.weight) for s in r.signals],
         nearest_pyq=PYQOut.model_validate(r.nearest_pyq, from_attributes=True) if r.nearest_pyq else None,
         nearest_paper=f"{r.nearest_pyq.paper.label} ({r.nearest_pyq.paper.year})" if r.nearest_pyq else None,
+        nearest_source=r.nearest_source or ("pyq" if r.nearest_pyq else None),
+        nearest_text=r.nearest_text, nearest_label=r.nearest_label,
     )
 
 
@@ -69,6 +71,7 @@ def candidate_out(q: CandidateQuestion, reveal_arm: bool = True) -> CandidateOut
         citations=citations_out(q),
         compliance=compliance_out(q.reports[-1]) if q.reports else None,
         novelty=novelty_out(q.novelty_reports[-1]) if q.novelty_reports else None,
+        claim_check=q.claim_check,
         review=ReviewOut(
             record_id=latest_review.record_id, reviewer=UserOut.model_validate(latest_review.reviewer, from_attributes=True),
             decision=latest_review.decision, edited_stem=latest_review.edited_stem, edit_distance=latest_review.edit_distance,
@@ -93,6 +96,17 @@ def generate(blueprint_id: UUID, background: BackgroundTasks, body: GenerateIn |
     bp = require_blueprint(db, user, blueprint_id, REVIEWER, COORDINATOR)
     if bp.frozen_at is None:
         raise HTTPException(409, "blueprint must be frozen before generation")
+    # Two runs on one blueprint at once would draft every row twice and interleave their
+    # candidates in the review queue. A run left `running` by a restart is failed at startup
+    # (orchestrator.recover_interrupted_runs), so one found here really is under way.
+    in_progress = db.scalar(
+        select(GenerationRun).where(
+            GenerationRun.blueprint_id == bp.blueprint_id, GenerationRun.status == "running",
+            GenerationRun.arm_label.is_(None),
+        )
+    )
+    if in_progress is not None:
+        raise HTTPException(409, "a generation run is already in progress for this blueprint")
     run = orchestrator.start_run(db, bp, suggestion=body.suggestion if body else None)
     background.add_task(orchestrator.execute_run, run.run_id)
     return run_out(run)

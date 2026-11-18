@@ -222,6 +222,10 @@ class CandidateQuestion(Base):
     options: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # MCQ options, else null
     state: Mapped[str] = mapped_column(Text)
     repair_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    # The evidence report for the answer key (services/claims.py), or null when it was not
+    # made: an evaluation run, a model that returned nothing usable, or a row written before
+    # this existed.
+    claim_check: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     run: Mapped[GenerationRun] = relationship(back_populates="candidates")
     constraint: Mapped[BlueprintConstraint] = relationship()
     citations: Mapped[list["GroundingCitation"]] = relationship(back_populates="question")
@@ -338,6 +342,13 @@ class NoveltyReport(Base):
     threshold: Mapped[float] = mapped_column(Float)
     is_duplicate: Mapped[bool] = mapped_column(Boolean)
     model_version: Mapped[str] = mapped_column(Text)  # combiner identity, or "untrained" fallback
+    # What the nearest question was, when it was not necessarily a past-year one. A draft can
+    # also repeat an earlier candidate of its own run or a question already in the bank, and a
+    # report that says "duplicate" has to be able to say of what. The text is copied rather than
+    # referenced because a run candidate may be redrafted after this report was written.
+    nearest_source: Mapped[str | None] = mapped_column(Text, nullable=True)  # pyq | run | bank
+    nearest_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    nearest_label: Mapped[str | None] = mapped_column(Text, nullable=True)  # "Q3 of this run"
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     question: Mapped["CandidateQuestion"] = relationship(back_populates="novelty_reports")
     nearest_pyq: Mapped[PYQ | None] = relationship()
@@ -413,6 +424,7 @@ class PaperTemplate(Base):
     exam_name: Mapped[str] = mapped_column(Text, default="")
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     instructions: Mapped[str] = mapped_column(Text, default="")
+    print_mapping: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

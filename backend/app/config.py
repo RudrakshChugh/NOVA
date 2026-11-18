@@ -71,13 +71,44 @@ class Settings(BaseSettings):
     failover_probe_timeout: float = 2.0
     generation_temperature: float = 0.7  # plan §3.3.2; logged per run, honoured only by backends that accept it
     retrieval_top_k: int = 5
+    # Below this cosine similarity the best passage found for a blueprint row is about something
+    # else: the material does not cover the row's concept. Retrieval always returns its top
+    # passages however weak they are, so without a floor the model is handed unrelated text and
+    # asked to write a "grounded" question from it — which it does, by inventing the content.
+    # Set from two measurements rather than chosen: on real lecture slides, rows the slides
+    # cover scored 0.57-0.70 and rows they do not scored 0.30-0.37; on a short mixed-topic
+    # passage, on-topic rows scored as low as 0.44. 0.40 sits between the two. It is an
+    # embedding similarity, so it is a judgement near the line — a row that is wrongly skipped
+    # says so by name on the run, and this can be lowered. 0 disables the check.
+    # Normal runs only; evaluation arms are never filtered.
+    retrieval_min_similarity: float = 0.40
     repair_budget: int = 2
+    # Extra attempts when a reply cannot be read at all (not JSON, no question in it). Separate
+    # from the repair budget: that one is for a question that is wrong, this for a reply that is
+    # not a question.
+    malformed_retry_budget: int = 2
+    # After a question is drafted, ask the model which sentences of the material state each
+    # fact in its answer key, then verify those quotes verbatim (services/claims.py). One extra
+    # model call per question, normal runs only, and it gates nothing.
+    claim_check_enabled: bool = True
+    # Rewrites allowed when the evidence check finds statements the passages do not make.
+    evidence_redraft_budget: int = 1
     grounding_min_similarity: float = 0.25
 
     # Novelty engine
     novelty_enabled: bool = True
     novelty_shortlist: int = 10  # past questions scored on all four signals per candidate
     novelty_redraft_budget: int = 1  # redrafts allowed when a draft duplicates a past question
+    # Past-year questions shown to the model before it drafts, so the first draft can avoid them.
+    # The floor is a cosine similarity to the blueprint row: below it a past question is about
+    # something else and listing it would only be noise.
+    novelty_avoid_k: int = 3
+    novelty_avoid_min_similarity: float = 0.35
+    # Also audit a draft against this run's earlier questions and the published bank, and show
+    # the model up to this many of the run's related questions. Normal runs only; an evaluation
+    # run is measured against past papers alone.
+    novelty_internal_check: bool = True
+    sibling_prompt_limit: int = 5
     novelty_model_path: Path = Path(__file__).resolve().parents[1] / "data" / "models" / "novelty_combiner.json"
 
     # Reviewer-adapted ranker

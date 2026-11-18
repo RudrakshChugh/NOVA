@@ -100,10 +100,21 @@ def _matrix(samples: Sequence[Sample]):
     )
 
 
-def _best_threshold(probabilities: Sequence[float], labels: Sequence[bool]) -> tuple[float, float]:
-    """Threshold maximising F1 on the validation fold. Ties are broken toward higher precision:
-    a false positive blocks a genuinely novel question, which costs more than a missed duplicate
-    that a reviewer may still catch."""
+def _best_threshold(probabilities: Sequence[float], labels: Sequence[bool]) -> tuple[float, float, float]:
+    """Threshold maximising F1 on the validation fold, and how wide the gap around it is.
+
+    Ties are broken toward higher precision: a false positive blocks a genuinely novel question,
+    which costs more than a missed duplicate that a reviewer may still catch.
+
+    The threshold returned is the *middle* of the gap below the best cut, not its upper edge.
+    Any value in that gap classifies the validation fold identically, so F1 cannot choose
+    between them — but the edge sits exactly on the weakest duplicate seen, and the first
+    genuinely new question that scores a hair above the strongest non-duplicate is then
+    flagged. That happened on the first model fitted to real papers: a question on a different
+    topic scored 0.472 against a threshold of 0.462. The midpoint leaves equal room on both
+    sides. The gap's width is returned so the caller can prefer the model that separates the
+    classes most clearly.
+    """
     candidates = sorted({round(p, 4) for p in probabilities} | {0.5})
     best = (0.5, -1.0, -1.0)
     for t in candidates:
@@ -114,7 +125,12 @@ def _best_threshold(probabilities: Sequence[float], labels: Sequence[bool]) -> t
         prec = precision(pairs) or 0.0
         if (score, prec) > (best[1], best[2]):
             best = (t, score, prec)
-    return best[0], best[1]
+    cut = best[0]
+    below = [p for p in probabilities if p < cut]
+    if not below:
+        return cut, best[1], 0.0
+    floor = max(below)
+    return (cut + floor) / 2, best[1], cut - floor
 
 
 def fit(train: Sequence[Sample], validation: Sequence[Sample], version: int) -> NoveltyCombiner:
@@ -127,20 +143,25 @@ def fit(train: Sequence[Sample], validation: Sequence[Sample], version: int) -> 
     x_train, y_train = _matrix(train)
     x_val, y_val = _matrix(validation)
 
-    # C_GRID runs from most to least regularised and the comparison is strictly greater, so a tie
-    # on validation F1 keeps the simplest model. At small sample sizes every C often ties, which
-    # means the selection is uninformative rather than wrong — the model card reports the C chosen
-    # and the fold sizes so a reader can see when that is the case.
+    # Selected on validation F1 first. At small sample sizes every C usually ties on F1, and the
+    # tie used to go to the most regularised model — whose probabilities are squeezed into a
+    # narrow band, so that duplicates and non-duplicates end up a few thousandths apart. The tie
+    # now goes to the model that separates the two classes most widely on the validation fold,
+    # measured as the gap around its threshold relative to the spread of its probabilities
+    # (relative, because a weakly regularised model stretches every probability and would
+    # otherwise win on scale alone). The model card reports the C chosen and the fold sizes.
     best = None
     for c in C_GRID:
         model = LogisticRegression(C=c, class_weight="balanced", max_iter=1000)
         model.fit(x_train, y_train)
         probs = [p[1] for p in model.predict_proba(x_val)]
-        threshold, score = _best_threshold(probs, y_val)
-        if best is None or score > best[0]:
-            best = (score, c, threshold, model)
+        threshold, score, gap = _best_threshold(probs, y_val)
+        spread = (max(probs) - min(probs)) or 1.0
+        key = (score, gap / spread)
+        if best is None or key > best[0]:
+            best = (key, c, threshold, model)
 
-    val_f1, c, threshold, model = best
+    (val_f1, separation), c, threshold, model = best
     coefficients = {name: float(w) for name, w in zip(SIGNAL_NAMES, model.coef_[0])}
     return NoveltyCombiner(
         coefficients=coefficients,
@@ -149,7 +170,10 @@ def fit(train: Sequence[Sample], validation: Sequence[Sample], version: int) -> 
         version=f"logistic_regression:v{version}",
         trained_at=datetime.now(timezone.utc).isoformat(),
         params={"C": c, "class_weight": "balanced", "selected_on": "validation fold"},
-        metrics={"validation_f1": val_f1, "n_train": len(train), "n_validation": len(validation)},
+        metrics={
+            "validation_f1": val_f1, "validation_separation": round(separation, 4),
+            "n_train": len(train), "n_validation": len(validation),
+        },
     )
 
 

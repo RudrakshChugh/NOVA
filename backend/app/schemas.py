@@ -155,6 +155,9 @@ class ValidationOut(BaseModel):
     # paper is not obliged to cover every outcome, but the coordinator should see which it
     # leaves out rather than discover it afterwards.
     uncovered: list[str] = []
+    # Advisory, never blocking. Today: rows that ask for a higher Bloom level than the course
+    # outcome they assess is itself stated at.
+    warnings: list[str] = []
 
 
 class GenerateIn(BaseModel):
@@ -232,6 +235,9 @@ class CandidateOut(BaseModel):
     compliance: ComplianceOut | None  # latest report
     novelty: "NoveltyOut | None"  # latest novelty audit, null when the engine did not run
     review: ReviewOut | None  # latest review
+    # Evidence for the answer key: each factual statement, and the sentence of the material
+    # found verbatim behind it. Null when the check was not made. Advisory; it gates nothing.
+    claim_check: dict | None = None
 
 
 class EvidenceOut(BaseModel):
@@ -317,6 +323,11 @@ class NoveltyOut(BaseModel):
     signals: list[NoveltySignalOut]
     nearest_pyq: PYQOut | None
     nearest_paper: str | None  # "End Semester 2024"
+    # Set when the closest question was not a past-year one: an earlier candidate of the same
+    # run ("run") or a published question ("bank"). Null on reports written before this existed.
+    nearest_source: str | None = None
+    nearest_text: str | None = None
+    nearest_label: str | None = None
 
 
 class PairBuildIn(BaseModel):
@@ -348,6 +359,9 @@ class PaperTemplateIn(BaseModel):
     exam_name: str = ""
     duration_minutes: int | None = Field(default=None, ge=1, le=600)
     instructions: str = ""
+    # Print the CO and BL columns on the candidates' paper too, as some institutes' papers do.
+    # Off by default: they are the setter's working and always appear on the answer key.
+    print_mapping: bool = False
 
 
 class PaperTemplateOut(PaperTemplateIn):

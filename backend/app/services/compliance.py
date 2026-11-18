@@ -72,6 +72,28 @@ def classify_bloom(stem: str) -> str | None:
     return hits[0][1]
 
 
+# A higher-level verb in front of a request to describe a procedure. Seen on every early real
+# run: "Analyze the scenario ... describe how you would ..., outlining the key steps". The
+# opening verb says `analyze`; what the student is actually asked to do is recall a method,
+# which is `understand`. Reading only the first verb let all of these through.
+_PROCEDURE_ASK = re.compile(
+    r"\b(?:describe|explain|outline|list|state|discuss|summari[sz]e|mention)\b[^.?!]{0,40}?"
+    r"\b(?:how (?:you|one|they) (?:would|will|can|could)|the (?:key |main |major |necessary |basic )?steps"
+    r"|the (?:process|procedure|approach|method) (?:of|for|to|you|used))\b"
+    r"|\b(?:outlining|listing|describing|explaining) the (?:key |main |major )?steps\b"
+    r"|\bsteps (?:you|one) would (?:take|follow)\b"
+    r"|\bhow would you (?:go about|approach)\b",
+    re.IGNORECASE,
+)
+
+
+def procedure_ask(stem: str) -> str | None:
+    """The phrase, if the stem asks for a description of how something is done rather than for
+    the thing itself."""
+    match = _PROCEDURE_ASK.search(stem)
+    return match.group(0).strip() if match else None
+
+
 def _content_words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z][a-z0-9\-]{3,}", text.lower()) if w not in _STOPWORDS}
 
@@ -87,6 +109,33 @@ def _mark_band(marks: int) -> tuple[int, int]:
         if lo <= marks <= hi:
             return (min_words, max_words)
     return _ABOVE_BAND
+
+
+def mark_band(marks: int) -> tuple[int, int]:
+    """The answer-key word band a mark weighting is checked against. Public so the generation
+    prompt can state the same numbers the check enforces."""
+    return _mark_band(marks)
+
+
+def cue_verbs(level: str) -> tuple[str, ...]:
+    """Single-word cue verbs for a Bloom level, for the prompt. Multi-word cues ("what is",
+    "show how") are left out: they are recognised in a stem, but are not something to tell a
+    model to open a question with."""
+    return tuple(c for c in BLOOM_CUES.get(level, ()) if " " not in c and c not in ("who", "when", "why"))
+
+
+def outcome_bloom_level(outcome_text: str) -> str | None:
+    """The Bloom level a course outcome is itself stated at, read from its leading verb.
+
+    "CO3 Design a normalised schema ..." is stated at `create`. The outcome code is dropped
+    first so that it cannot be mistaken for a word. Returns None when the statement opens with
+    no recognised cue, which is common and means only that nothing can be said."""
+    text = re.sub(r"^\s*C[O0]\s*[-.]?\s*\d{1,2}\s*[-:.)]?\s*", "", outcome_text, flags=re.IGNORECASE)
+    return classify_bloom(text)
+
+
+def bloom_rank(level: str) -> int:
+    return _LEVEL_RANK[level]
 
 
 def checked_fields(constraint) -> list[str]:
@@ -107,6 +156,13 @@ def check(constraint, stem: str, answer_key: str, options: list[str] | None, bes
     observed_bloom = classify_bloom(stem)
     if observed_bloom != constraint.bloom_level:
         violations.append(Violation("bloom_level", constraint.bloom_level, observed_bloom or "unclassified"))
+    elif _LEVEL_RANK[constraint.bloom_level] >= _LEVEL_RANK["apply"] and (asked := procedure_ask(stem)):
+        # The verb is right and the task is not: from `apply` upwards the student has to produce
+        # the result, and a description of the method is a lower level whatever opens the stem.
+        violations.append(Violation(
+            "bloom_level", f"{constraint.bloom_level}: ask for the result itself",
+            f"opens at {constraint.bloom_level} but asks to \u201c{asked}\u201d, a description of a procedure (understand)",
+        ))
 
     # question_type
     checks += 1
