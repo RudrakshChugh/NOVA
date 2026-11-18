@@ -30,6 +30,22 @@ All four engines of [`plan.md`](plan.md) are implemented. What remains is instit
 
 ---
 
+## Running it locally without installing PostgreSQL
+
+The backend needs PostgreSQL with the `vector` extension. For development that can live entirely
+inside the virtualenv:
+
+```bash
+cd backend
+pip install -r requirements.txt pixeltable-pgserver
+python scripts/fetch_embedding_model.py
+python scripts/dev_db.py        # starts Postgres + pgvector, prints DATABASE_URL
+```
+
+Put the printed `DATABASE_URL` in `backend/.env` together with an LLM backend (`LLM_BACKEND=groq`
+and `GROQ_API_KEY=…`, or a local Ollama), then `uvicorn app.main:app --port 8000` and, in
+`frontend/`, `npm install && npm run dev`.
+
 ## System Architecture
 
 ```mermaid

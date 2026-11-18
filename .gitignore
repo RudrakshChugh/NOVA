@@ -8,3 +8,20 @@ frontend/dist/
 backend/data/models/all-MiniLM-L6-v2-onnx/
 backend/data/models/*.json
 .wrangler/
+.DS_Store
+
+# Local development database (scripts/dev_db.py) and editor/agent settings
+backend/.localdb/
+.claude/
+
+# Local inputs used for testing. Course material and past papers are not ours to publish,
+# and they would add ~10 MB to the repository.
+/unit2.pdf
+/OLD papers/
+/User-Stories and User Cards (1).pdf
+
+# Throwaway design mock-ups used to choose the interface style
+/design-previews/
+
+# Papers generated while testing
+/sample-output/
