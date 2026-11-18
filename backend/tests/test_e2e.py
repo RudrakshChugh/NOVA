@@ -79,7 +79,7 @@ def test_full_journey(client, stub, tmp_path):
     client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator)
     assert client.post(f"/blueprints/{bp['blueprint_id']}/validate").json() == {
         "ok": True, "issues": [], "total_marks": 5,
-        "outcomes": {rows[0]["course_outcome"]: 5}, "uncovered": []}
+        "outcomes": {rows[0]["course_outcome"]: 5}, "uncovered": [], "warnings": []}
     frozen = client.post(f"/blueprints/{bp['blueprint_id']}/freeze", headers=coordinator).json()
     assert frozen["version"] == 1 and frozen["frozen_at"]
     assert client.put(f"/blueprints/{bp['blueprint_id']}/constraints", json=rows, headers=coordinator).status_code == 409

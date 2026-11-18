@@ -11,7 +11,18 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://postgres:postgres@lo
 # Settings also read backend/.env, so the suite would otherwise inherit whatever the developer has
 # configured there — pointing at a real identity provider, or with email sign-in switched off.
 # Environment variables outrank the file, so the two the suite depends on are pinned here.
+# The evidence check is one more model call per question. The stubs in these suites count
+# their calls and return one fixed reply, so it is off here and switched on by the tests
+# that are about it.
+os.environ["CLAIM_CHECK_ENABLED"] = "false"
 os.environ["DEV_LOGIN"] = "true"
+# The suite must never reach a real model. With a hosted key in backend/.env, the one test that
+# starts a run without stubbing the adapter would otherwise call the provider for real — spending
+# the developer's quota and hanging the suite on a rate limit. Pointed at a port nothing listens
+# on, that run fails immediately, which is all the test needs.
+os.environ["LLM_BACKEND"] = "ollama"
+os.environ["OLLAMA_URL"] = "http://127.0.0.1:9"
+os.environ["GROQ_API_KEY"] = ""
 os.environ["OIDC_ISSUER"] = ""
 
 import psycopg  # noqa: E402
@@ -26,10 +37,19 @@ from sqlalchemy import select  # noqa: E402
 
 @pytest.fixture(scope="session")
 def client(tmp_path_factory):
-    with psycopg.connect("postgresql://postgres:postgres@localhost:5432/postgres", autocommit=True) as conn:
-        if conn.execute("SELECT 1 FROM pg_database WHERE datname='aqp_test'").fetchone() is None:
-            conn.execute("CREATE DATABASE aqp_test")
+    from sqlalchemy.engine import make_url
+
     from app.config import settings
+
+    # Derived from DATABASE_URL rather than written out, so the suite runs against whatever
+    # Postgres the developer points it at — a different port, user or password — instead of
+    # only the one address that used to be hard-coded here.
+    target = make_url(settings.database_url)
+    admin = target.set(drivername="postgresql", database="postgres").render_as_string(hide_password=False)
+    with psycopg.connect(admin, autocommit=True) as conn:
+        exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (target.database,)).fetchone()
+        if exists is None:
+            conn.execute(f'CREATE DATABASE "{target.database}"')
 
     settings.storage_dir = tmp_path_factory.mktemp("storage")
     # keep a test run from overwriting the models the application serves
