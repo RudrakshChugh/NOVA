@@ -10,7 +10,9 @@ from .db import SessionLocal, init_db
 from .models import Course, CourseMember, DuplicatePair, ModelVersion, RoleChange, User
 from .routers import (
     auth, bank, blueprints, courses, evaluation, materials, novelty, papers, pyqs, reviews, runs,
+    system,
 )
+from .services import orchestrator
 from .scoping import COORDINATOR, REVIEWER
 
 # Demo accounts for email sign-in. Each has a platform standing and a role on the seeded course,
@@ -120,6 +122,11 @@ async def lifespan(_: FastAPI):
     seed()
     backfill_model_scope()
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
+    # Background work does not survive a restart, so anything still marked as under way at
+    # startup was orphaned by one. Without this a single crash leaves a run "in progress"
+    # forever and the interface never offers to start another.
+    orchestrator.recover_interrupted_runs()
+    materials.recover_interrupted_jobs()
     yield
 
 
@@ -131,9 +138,17 @@ app.add_middleware(
 
 app.include_router(auth.router)
 
+
+@app.get("/health", tags=["system"])
+def health() -> dict:
+    """Liveness only, and deliberately unauthenticated: it says the process is up and nothing
+    about what it holds. The detailed readiness report is `/system/status`, behind sign-in."""
+    return {"status": "ok"}
+
+
 # Everything else requires a signed-in account that has been admitted. Without this the read
 # endpoints are public, which on a deployed instance would hand uploaded course material, generated
 # candidates and the question bank to anyone with the URL. Per-subject scoping inside the routers
 # applies on top of this: being admitted says nothing about which subjects you may open.
-for r in (courses, materials, pyqs, blueprints, runs, reviews, bank, papers, novelty, evaluation):
+for r in (courses, materials, pyqs, blueprints, runs, reviews, bank, papers, novelty, evaluation, system):
     app.include_router(r.router, dependencies=[Depends(require_active)])

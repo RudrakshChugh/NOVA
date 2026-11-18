@@ -63,6 +63,31 @@ def _store(course_id: UUID, file: UploadFile, ext: str) -> tuple[Path, str]:
     return dest, digest.hexdigest()
 
 
+def recover_interrupted_jobs() -> int:
+    """Fail the ingestion jobs a restart left behind, for the same reason as generation runs:
+    the task that would have finished them died with the process, and a row that says `queued`
+    forever reads as "still working" to whoever uploaded the file."""
+    with SessionLocal() as db:
+        stuck = list(db.scalars(
+            select(IngestionJob).where(IngestionJob.state.in_(("queued", "running")))
+        ).all())
+        for job in stuck:
+            job.state = "failed"
+            job.detail = "Interrupted: the server restarted before this file was indexed. Upload it again."
+            job.finished_at = datetime.now(timezone.utc)
+            material = db.get(Material, job.material_id) if job.material_id else None
+            # Only a material with no passages is removed; one that finished indexing just
+            # before the restart is real and stays.
+            if material is not None and not db.scalar(
+                select(Chunk.chunk_id).where(Chunk.material_id == material.material_id).limit(1)
+            ):
+                job.material_id = None
+                db.flush()
+                db.delete(material)
+        db.commit()
+        return len(stuck)
+
+
 def run_jobs(job_ids: list[UUID]) -> None:
     """Index each queued file in turn, in a background task with its own session.
 
