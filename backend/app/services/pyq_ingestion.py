@@ -45,7 +45,13 @@ _MCQ_OPTIONS = re.compile(r"(?:^|\s)\(?[a-d]\)\s+\S", re.IGNORECASE)
 _GRID_HEADER = re.compile(r"\bQues(?:tions?)?\b.*\bMarks\b.*\bCO\b.*\bBL\b", re.IGNORECASE)
 # "Q1 ", "Q5. " and "Q2a " all start a question. The sub-part letter can follow the number
 # with no separator at all, and missing that merges the question into the one before it.
-_GRID_QUESTION = re.compile(r"^Q\s*\.?\s*(\d{1,2})\s*[.)]?\s*([a-z])?[.)]?\s+")
+# The marker can also stand alone on its line ("Q2a", then the question on the next): a table
+# cell whose text wrapped is extracted that way, and requiring text after the marker dropped
+# every such question into the one before it.
+_GRID_QUESTION = re.compile(r"^Q\s*\.?\s*(\d{1,2})\s*[.)]?\s*([a-z])?[.)]?(?:\s+|$)")
+# A sub-part marker printed without the Q ("2b.", "5b"), alone on its line. It belongs to the
+# question already open and is not part of its wording.
+_GRID_SUBPART = re.compile(r"^(\d{1,2})\s*[a-z]\s*[.)]?$")
 # A line that is nothing but table cells. OCR of this column is unreliable: CO5 prints as C05,
 # and L1 as "L I" or "Ll", so the Bloom cell tolerates the letters those become.
 _GRID_CELLS = re.compile(r"^(?:\s*(?:\d{1,2}|C[O0]\s?\d|L\s?[1-6IiJlL]))+\s*$")
@@ -161,6 +167,9 @@ def split_grid_questions(text: str) -> list[ExtractedQuestion] | None:
             else:
                 blocks.append((number, [line[match.end():].strip()]))
         elif blocks:
+            sub = _GRID_SUBPART.match(line)
+            if sub and sub.group(1) == blocks[-1][0]:
+                continue
             blocks[-1][1].append(line)
     if len(blocks) < 2:
         return None  # a header-like line in a paper that is not actually a grid
@@ -183,11 +192,64 @@ def split_grid_questions(text: str) -> list[ExtractedQuestion] | None:
     return out or None
 
 
+_BARE_NUMBER = re.compile(r"^(\d{1,2})\s+(?=[A-Z\"'(])")
+_LONE_NUMBER = re.compile(r"^\d{1,2}$")
+
+
+def split_bare_numbered(text: str) -> list[ExtractedQuestion] | None:
+    """Split a paper whose questions are numbered with a bare number and nothing else:
+
+        1 Describe the variations between ...
+        10
+        2 Describe the steps involved in ...
+        10
+
+    which is what a two-column table (question | marks) with no header row extracts to. A bare
+    number at the start of a line is weak evidence on its own — a wrapped sentence can begin
+    with one — so a line only opens a question when its number is exactly the next in sequence,
+    and the layout is only accepted when at least three questions are found that way. A number
+    alone on its line is that question's marks.
+    """
+    blocks: list[tuple[str, list[str], list[int]]] = []
+    expected = 1
+    for line in (ln.strip() for ln in text.splitlines()):
+        if not line:
+            continue
+        match = _BARE_NUMBER.match(line)
+        if match and int(match.group(1)) == expected:
+            blocks.append((match.group(1), [line[match.end():].strip()], []))
+            expected += 1
+        elif blocks and _LONE_NUMBER.match(line):
+            blocks[-1][2].append(int(line))
+        elif blocks:
+            blocks[-1][1].append(line)
+    if len(blocks) < 3:
+        return None
+
+    out: list[ExtractedQuestion] = []
+    for number, body, cells in blocks:
+        stem = re.sub(r"\s+", " ", " ".join(body)).strip(" .;:-–—")
+        if len(stem.split()) < 4:
+            continue
+        marks = sum(cells) or None
+        out.append(ExtractedQuestion(
+            number=number, text=stem, marks=marks,
+            question_type=infer_type(stem, marks), bloom_level=classify_bloom(stem),
+        ))
+    return out if len(out) >= 3 else None
+
+
 def split_questions(text: str) -> list[ExtractedQuestion]:
     """Split a paper into questions on its numbering; fall back to blank-line blocks."""
     grid = split_grid_questions(text)
     if grid is not None:
         return grid
+    # Only when ordinary numbering ("1.", "Q1", "1)") finds nothing: a paper that uses it must
+    # not be re-read under the weaker bare-number rule.
+    if not any(_NUMBERING.match(ln.strip()) for ln in text.splitlines()):
+        bare = split_bare_numbered(text)
+        if bare is not None:
+            return bare
 
     lines = [ln.strip() for ln in text.splitlines()]
     blocks: list[tuple[str | None, list[str]]] = []
