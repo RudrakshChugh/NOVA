@@ -42,12 +42,15 @@ export function PageHead({ eyebrow, title, lede, actions }) {
 }
 
 /** The "what happens here" copy, folded away by default once it has been read once. */
-export function Explainer({ id, title = 'How this step works', children }) {
+export function Explainer({ id, title = 'How this works', children }) {
   const key = `explainer:${id}`
-  const [open, setOpen] = useState(() => localStorage.getItem(key) !== 'closed')
+  const [open, setOpen] = useState(() => {
+    // Closed until asked for: the page should show the work first, and the explanation on request.
+    try { return localStorage.getItem(key) === 'open' } catch { return false }  // private window
+  })
   const toggle = (e) => {
     setOpen(e.target.open)
-    localStorage.setItem(key, e.target.open ? 'open' : 'closed')
+    try { localStorage.setItem(key, e.target.open ? 'open' : 'closed') } catch { /* not remembered */ }
   }
   return (
     <details className="explainer" open={open} onToggle={toggle}>
@@ -111,8 +114,12 @@ export function Tabs({ tabs, value, onChange }) {
 
 /* ─── display ────────────────────────────────────────────────────────────────────────────── */
 
-export function Badge({ tone = 'neutral', dot, children }) {
-  return <span className={`badge badge-${tone}`}>{dot && <span className="dot" />}{children}</span>
+export function Badge({ tone = 'neutral', dot, live, children }) {
+  return (
+    <span className={`badge badge-${tone}${live ? ' live' : ''}`}>
+      {(dot || live) && <span className="dot" />}{children}
+    </span>
+  )
 }
 
 export function Note({ tone = 'info', icon, children }) {
@@ -145,9 +152,9 @@ export function Meter({ value, tone = '', show = true }) {
   )
 }
 
-export function Progress({ value, max, tone = '' }) {
+export function Progress({ value, max, tone = '', live = false }) {
   const pct = max > 0 ? Math.min(1, value / max) : 0
-  return <div className={`progress ${tone}`} role="progressbar" aria-valuenow={value} aria-valuemax={max}><i style={{ width: `${pct * 100}%` }} /></div>
+  return <div className={`progress ${tone}${live ? ' live' : ''}`} role="progressbar" aria-valuenow={value} aria-valuemax={max}><i style={{ width: `${pct * 100}%` }} /></div>
 }
 
 export function Table({ head, children, className = '' }) {

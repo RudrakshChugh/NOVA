@@ -7,6 +7,10 @@ const ROLE_HELP = {
   coordinator: 'Uploads course material and past papers, defines and freezes the blueprint, fits the engines.',
   reviewer: 'Generates candidates, reviews them against the checks, publishes the accepted ones.',
   pending: 'Signed in, but not yet granted a role by a coordinator.',
+  // Platform standings. The seeded accounts carry these rather than a per-subject role, so
+  // without them the sign-in cards showed a name and nothing about what it can do.
+  admin: 'Administrator and coordinator: uploads sources, freezes the blueprint, admits people.',
+  member: 'Reviewer: generates candidates, reviews them against the checks, publishes.',
 }
 
 // Why a sign-in was refused, in the user's terms. The backend sends a short code rather than a
@@ -20,9 +24,9 @@ const SIGN_IN_ERROR = {
 }
 
 const PITCH = [
-  ['shield', 'Blueprint compliance', 'Six deterministic checks per draft. Failures are named by field and sent back to the model — it never grades itself.'],
-  ['target', 'Novelty against past papers', 'Four independent signals, combined by a fitted model whose weight per signal is reported.'],
-  ['sort', 'Reviewer-adapted ranking', 'Learns from accept, edit and reject decisions — and ships only if it beats two floors.'],
+  ['shield', 'Aligned to the outcome', 'Six deterministic checks per draft against its blueprint row. The model never grades itself.'],
+  ['sparkle', 'New, not recycled', 'Scored against past papers, the bank and the rest of the paper on four independent signals.'],
+  ['sort', 'Ranked by your reviewers', 'Learns from accept, edit and reject — and ships only if it beats two floors.'],
   ['evaluation', 'Evidence, not claims', 'Pinned baselines, blinded review and an interval on every number.'],
 ]
 
@@ -61,17 +65,17 @@ export default function Login({ onLogin }) {
   return (
     <div className="login">
       <div className="login-pitch">
-        <div className="brand-mark">AQ</div>
-        <h1>Exam questions that are checked before anyone reads them</h1>
+        <span className="wordmark big">NOVA</span>
+        <h1>Exam questions, <em>audited</em> before anyone reads them.</h1>
         <p>
-          Blueprint-compliant, source-grounded question generation with compliance auditing,
-          novelty detection against your own past papers, and a reviewer-adapted ranker.
+          Source-grounded questions written to your blueprint, checked against every course
+          outcome and compared with everything you have set before.
         </p>
         <ul>
           {PITCH.map(([icon, title, body]) => (
             <li key={title}>
-              <Icon name={icon} size={19} />
-              <span><strong>{title}</strong>{body}</span>
+              <Icon name={icon} size={20} />
+              <strong>{title}</strong>{body}
             </li>
           ))}
         </ul>
@@ -79,7 +83,7 @@ export default function Login({ onLogin }) {
 
       <div className="login-form">
         <div className="inner">
-          <h2 style={{ fontSize: 22 }}>Sign in</h2>
+          <h2>Sign in</h2>
 
           {loading ? (
             <div className="stack" style={{ marginTop: 'var(--s5)' }}>
@@ -99,8 +103,8 @@ export default function Login({ onLogin }) {
           ) : (
             <>
               <p className="muted" style={{ margin: 'var(--s2) 0 var(--s5)' }}>
-                No identity provider is configured, so pick a seeded user. Each role sees the part of
-                the workflow it is responsible for.
+                Development sign-in: no identity provider is configured, so choose a seeded
+                account. Each role sees the part of the workflow it is responsible for.
               </p>
               <div className="stack">
                 {users.map((u) => (
@@ -112,7 +116,7 @@ export default function Login({ onLogin }) {
                     </span>
                     {pending === u.email
                       ? <span className="spinner" />
-                      : <Icon name="arrowRight" size={16} className="muted" />}
+                      : <Icon name="arrowRight" size={16} />}
                   </button>
                 ))}
               </div>

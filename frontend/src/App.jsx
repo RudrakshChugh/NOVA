@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, hasToken, setToken } from './api'
+import { api, hasToken, onSessionExpired, setToken } from './api'
 import Shell from './components/Shell'
 import { Btn, Card, ToastHost } from './components/ui'
 import Bank from './pages/Bank'
@@ -7,6 +7,7 @@ import Blueprints from './pages/Blueprints'
 import Engines from './pages/Engines'
 import Evaluation from './pages/Evaluation'
 import Generate from './pages/Generate'
+import Home from './pages/Home'
 import Login from './pages/Login'
 import Materials from './pages/Materials'
 import Paper from './pages/Paper'
@@ -14,7 +15,7 @@ import People from './pages/People'
 import Review from './pages/Review'
 
 const PAGES = {
-  materials: Materials, blueprints: Blueprints, generate: Generate, review: Review,
+  home: Home, materials: Materials, blueprints: Blueprints, generate: Generate, review: Review,
   bank: Bank, paper: Paper, engines: Engines, evaluation: Evaluation, people: People,
 }
 
@@ -69,17 +70,30 @@ function NoSubjects({ user, onSignOut }) {
   )
 }
 
+function Boot() {
+  return (
+    <div className="boot" role="status" aria-label="Loading">
+      <span className="wordmark big">NOVA</span>
+      <span>Loading…</span>
+    </div>
+  )
+}
+
 export default function App() {
   const [user, setUser] = useState(null)
   const [courses, setCourses] = useState(null)  // null while unknown, [] when there are none
   const [course, setCourse] = useState(null)
   const [booting, setBooting] = useState(true)
-  const [step, setStep] = useState('materials')
+  const [step, setStep] = useState('home')
   const [runId, setRunId] = useState(null)
   const [progress, setProgress] = useState({})
   const [waiting, setWaiting] = useState(0)
 
-  const signOut = () => { setToken(''); setUser(null); setCourses(null); setCourse(null) }
+  const signOut = useCallback(() => { setToken(''); setUser(null); setCourses(null); setCourse(null) }, [])
+
+  // A session lasts twelve hours. When the server stops accepting it, every screen would
+  // otherwise fail in its own way; this returns to sign-in once, wherever the 401 came from.
+  useEffect(() => { onSessionExpired(signOut) }, [signOut])
 
   useEffect(() => {
     // Only probe when a session is actually stored. Arriving from the sign-in callback the token
@@ -110,6 +124,7 @@ export default function App() {
     setCourse(next)
     setRunId(null)
     setProgress({})
+    setStep('home')
   }
 
   // Which steps are complete, so the sidebar can show where this subject is in the journey.
@@ -140,10 +155,10 @@ export default function App() {
       .catch(() => {})
   }, [user, step])
 
-  if (booting) return <div className="boot"><span className="spinner" style={{ width: 20, height: 20 }} />Loading…</div>
+  if (booting) return <Boot />
   if (!user) return <ToastHost><Login onLogin={setUser} /></ToastHost>
   if (user.role === 'pending') return <ToastHost><AwaitingApproval user={user} onSignOut={signOut} /></ToastHost>
-  if (courses === null) return <div className="boot"><span className="spinner" style={{ width: 20, height: 20 }} />Loading…</div>
+  if (courses === null) return <Boot />
   if (!course) return <ToastHost><NoSubjects user={user} onSignOut={signOut} /></ToastHost>
 
   const go = (key, id) => { if (id) setRunId(id); setStep(key); window.scrollTo({ top: 0 }) }
@@ -155,7 +170,7 @@ export default function App() {
         user={user} course={course} courses={courses} onPickCourse={pickCourse}
         step={step} progress={progress} waiting={waiting} go={go} onSignOut={signOut}
       >
-        <Page course={course} user={user} go={go} runId={runId} />
+        <Page course={course} user={user} go={go} runId={runId} progress={progress} />
       </Shell>
     </ToastHost>
   )
